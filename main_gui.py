@@ -342,13 +342,22 @@ class MusicDLGUI:
 
     # --- NOUVELLES MÉTHODES POUR LE TÉLÉCHARGEMENT PAR URL ---
     def _validate_youtube_url(self, url: str) -> bool:
-        """Valide si l'URL fournie est une URL YouTube valide."""
+        """Valide si l'URL fournie est une URL YouTube/YouTube Music valide (vidéos individuelles ou playlists)."""
         youtube_patterns = [
+            # Vidéos YouTube classiques
             r'https?://(www\.)?youtube\.com/watch\?v=',
             r'https?://(www\.)?youtu\.be/',
             r'https?://(www\.)?youtube\.com/embed/',
             r'https?://(www\.)?youtube\.com/v/',
-            r'https?://m\.youtube\.com/watch\?v='
+            r'https?://m\.youtube\.com/watch\?v=',
+            # Playlists YouTube
+            r'https?://(www\.)?youtube\.com/playlist\?list=',
+            r'https?://(www\.)?youtube\.com/watch\?.*&list=',
+            # YouTube Music
+            r'https?://music\.youtube\.com/watch\?v=',
+            r'https?://music\.youtube\.com/playlist\?list=',
+            # YouTube Shorts
+            r'https?://(www\.)?youtube\.com/shorts/',
         ]
         
         import re
@@ -357,8 +366,72 @@ class MusicDLGUI:
                 return True
         return False
 
+    def _extract_video_info_from_url(self, url: str) -> dict:
+        """Extrait les informations de base depuis une URL YouTube/YouTube Music."""
+        import re
+        
+        # Pour les playlists
+        playlist_patterns = [
+            r'[&?]list=([^&]+)',  # Playlist ID
+        ]
+        
+        # Pour les vidéos individuelles
+        video_patterns = [
+            r'[?&]v=([^&]+)',  # youtube.com/watch?v=ID
+            r'youtu\.be/([^?]+)',  # youtu.be/ID
+            r'/embed/([^?]+)',  # youtube.com/embed/ID
+            r'/v/([^?]+)',  # youtube.com/v/ID
+            r'/shorts/([^?]+)',  # youtube.com/shorts/ID
+        ]
+        
+        # Vérifier si c'est une playlist
+        for pattern in playlist_patterns:
+            match = re.search(pattern, url)
+            if match:
+                playlist_id = match.group(1)
+                # Vérifier si c'est aussi une vidéo spécifique dans la playlist
+                video_id = None
+                for video_pattern in video_patterns:
+                    video_match = re.search(video_pattern, url)
+                    if video_match:
+                        video_id = video_match.group(1)
+                        break
+                
+                if video_id:
+                    return {
+                        'type': 'video_in_playlist',
+                        'video_id': video_id,
+                        'playlist_id': playlist_id,
+                        'title': f'Vidéo {video_id} (Playlist {playlist_id})'
+                    }
+                else:
+                    return {
+                        'type': 'playlist',
+                        'playlist_id': playlist_id,
+                        'title': f'Playlist YouTube - {playlist_id}'
+                    }
+        
+        # Vérifier si c'est une vidéo individuelle
+        for pattern in video_patterns:
+            match = re.search(pattern, url)
+            if match:
+                video_id = match.group(1)
+                # Déterminer la source
+                source = "YouTube Music" if "music.youtube.com" in url else "YouTube"
+                return {
+                    'type': 'video',
+                    'video_id': video_id,
+                    'title': f'Vidéo {source} - {video_id}'
+                }
+        
+        # Fallback
+        return {
+            'type': 'unknown',
+            'title': 'Contenu YouTube (URL directe)'
+        }
+
     def download_from_url(self):
-        """Télécharge directement depuis une URL fournie."""
+        """Télécharge directement depuis une URL fournie (vidéos, playlists, YouTube Music)."""
         url = self.url_entry.get().strip()
         if not url:
             self.log("Veuillez entrer une URL YouTube.")
@@ -367,18 +440,35 @@ class MusicDLGUI:
         
         if not self._validate_youtube_url(url):
             self.log("URL YouTube invalide.")
-            messagebox.showerror("URL invalide", "L'URL fournie ne semble pas être une URL YouTube valide.")
+            messagebox.showerror("URL invalide", "L'URL fournie ne semble pas être une URL YouTube/YouTube Music valide.")
             return
+        
+        # Extraire les informations de l'URL
+        url_info = self._extract_video_info_from_url(url)
         
         download_format = self.download_format_var.get()
         is_audio_only = (download_format == "MP3")
         
-        self.log(f"Téléchargement direct en format {download_format} de: {url}")
+        # Messages différents selon le type de contenu
+        if url_info['type'] == 'playlist':
+            self.log(f"Téléchargement de playlist en format {download_format}: {url}")
+            messagebox.showinfo("Playlist détectée", 
+                            f"Une playlist a été détectée. Le téléchargement peut prendre du temps selon le nombre de vidéos.\n"
+                            f"Format: {download_format}")
+        elif url_info['type'] == 'video_in_playlist':
+            self.log(f"Téléchargement de vidéo spécifique dans playlist en format {download_format}: {url}")
+        else:
+            self.log(f"Téléchargement direct en format {download_format} de: {url}")
         
         def download_callback(success_count, total_count):
             if success_count > 0:
-                self.log("Téléchargement direct terminé avec succès.")
-                messagebox.showinfo("Téléchargement Terminé", "Le téléchargement a été effectué avec succès!")
+                if url_info['type'] == 'playlist':
+                    self.log(f"Téléchargement de playlist terminé: {success_count}/{total_count} vidéos réussies.")
+                    messagebox.showinfo("Téléchargement Terminé", 
+                                    f"Playlist téléchargée: {success_count}/{total_count} vidéos réussies!")
+                else:
+                    self.log("Téléchargement direct terminé avec succès.")
+                    messagebox.showinfo("Téléchargement Terminé", "Le téléchargement a été effectué avec succès!")
                 # Vider le champ URL après un téléchargement réussi
                 self.url_entry.delete(0, tk.END)
             else:
@@ -388,7 +478,7 @@ class MusicDLGUI:
         self.downloader.download_items_in_bulk([url], is_audio_only=is_audio_only, callback=download_callback)
 
     def add_url_to_memory(self):
-        """Ajoute l'URL directement à la mémoire avec un titre générique."""
+        """Ajoute l'URL directement à la mémoire avec un titre informatif."""
         url = self.url_entry.get().strip()
         if not url:
             self.log("Veuillez entrer une URL YouTube.")
@@ -397,26 +487,25 @@ class MusicDLGUI:
         
         if not self._validate_youtube_url(url):
             self.log("URL YouTube invalide.")
-            messagebox.showerror("URL invalide", "L'URL fournie ne semble pas être une URL YouTube valide.")
+            messagebox.showerror("URL invalide", "L'URL fournie ne semble pas être une URL YouTube/YouTube Music valide.")
             return
         
-        # Extraire l'ID de la vidéo depuis l'URL pour créer un titre plus informatif
-        import re
-        video_id = None
-        patterns = [
-            r'[?&]v=([^&]+)',  # youtube.com/watch?v=ID
-            r'youtu\.be/([^?]+)',  # youtu.be/ID
-            r'/embed/([^?]+)',  # youtube.com/embed/ID
-            r'/v/([^?]+)'  # youtube.com/v/ID
-        ]
+        # Extraire les informations de l'URL
+        url_info = self._extract_video_info_from_url(url)
+        title = url_info['title']
         
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                video_id = match.group(1)
-                break
-        
-        title = f"Vidéo YouTube - {video_id}" if video_id else "Vidéo YouTube (URL directe)"
+        # Message d'avertissement pour les playlists
+        if url_info['type'] == 'playlist':
+            if not messagebox.askyesno("Playlist détectée", 
+                                    "Vous ajoutez une playlist entière à la mémoire. "
+                                    "Cela téléchargera toutes les vidéos de la playlist lors du téléchargement.\n\n"
+                                    "Voulez-vous continuer ?"):
+                return
+            title = f"🎵 {title}"  # Icône pour identifier les playlists
+        elif url_info['type'] == 'video_in_playlist':
+            title = f"📹 {title}"  # Icône pour vidéo dans playlist
+        elif "music.youtube.com" in url:
+            title = f"🎶 {title}"  # Icône pour YouTube Music
         
         if self.memory.add_item(title, url, "Inconnue"):
             self.log(f"URL ajoutée à la mémoire: {url}")
@@ -620,16 +709,34 @@ class MusicDLGUI:
                                     values=(i+1, item['title'], item['duration']))
 
     def download_all_from_memory(self):
-        """Télécharge toutes les URLs de la mémoire."""
+        """Télécharge toutes les URLs de la mémoire (gère les playlists)."""
         urls = self.memory.get_urls()
         if not urls:
             self.log("La mémoire est vide. Rien à télécharger.")
             return
         
+        # Compter les playlists pour avertir l'utilisateur
+        playlist_count = 0
+        for url in urls:
+            url_info = self._extract_video_info_from_url(url)
+            if url_info['type'] == 'playlist':
+                playlist_count += 1
+        
+        if playlist_count > 0:
+            if not messagebox.askyesno("Playlists détectées", 
+                                    f"Votre mémoire contient {playlist_count} playlist(s). "
+                                    f"Le téléchargement peut prendre beaucoup de temps.\n\n"
+                                    f"Total d'éléments en mémoire: {len(urls)}\n"
+                                    f"Voulez-vous continuer ?"):
+                return
+        
         download_format = self.download_format_var.get()
         is_audio_only = (download_format == "MP3")
             
         self.log(f"Téléchargement de tous les {len(urls)} éléments de la mémoire en format {download_format}...")
+        if playlist_count > 0:
+            self.log(f"Attention: {playlist_count} playlist(s) détectée(s), le téléchargement peut être long.")
+        
         self.downloader.download_items_in_bulk(urls, is_audio_only=is_audio_only, callback=self.on_multiple_download_complete)
 
     def remove_selected_from_memory(self):

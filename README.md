@@ -187,4 +187,4 @@ Les contributions sont les bienvenues ! Si vous souhaitez améliorer MusicDL, n'
 
 ## Licence
 
-Ce projet est sous licence [MIT](LICENSE). (Note : Le fichier `LICENSE` n'était pas fourni, mais il est recommandé d'en ajouter un).
+Ce projet est sous licence [MIT](LICENSE).

@@ -48,7 +48,7 @@ MusicDL est une application de bureau conçue pour faciliter le téléchargement
 
 ## Lancement de l'application
 
-Pour lancer MusicDL, exécutez le script `main.py` :
+Pour lancer MusicDL, exécutez le script `Youtube Downloader.bat` :
 
 ```
 python main.py

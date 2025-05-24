@@ -163,6 +163,40 @@ class MusicDLGUI:
                                 style='Accent.TButton') # Utilise le style Accent
         search_btn.pack(pady=(0, 0), side='right') # Aligné à droite
         
+        # --- NOUVELLE SECTION : Téléchargement direct par URL ---
+        url_frame = ttk.LabelFrame(left_frame, text="Téléchargement Direct", style='Custom.TLabelframe',
+                                   padding=(15, 10, 15, 15))
+        url_frame.pack(fill='x', pady=(0, 10), padx=10)
+        
+        ttk.Label(url_frame, text="URL YouTube:", style='Custom.TLabel').pack(pady=(0, 5), anchor='w')
+        self.url_entry = ttk.Entry(url_frame, width=50, style='TEntry')
+        self.url_entry.pack(fill='x', pady=(0, 10))
+        self.url_entry.bind('<Return>', lambda e: self.download_from_url())
+        
+        # Frame pour les boutons de téléchargement direct
+        url_btn_frame = ttk.Frame(url_frame, style='Custom.TFrame')
+        url_btn_frame.pack(fill='x')
+        
+        # Sélecteur de format pour URL directe
+        format_selector_url_frame = ttk.Frame(url_btn_frame, style='Custom.TFrame')
+        format_selector_url_frame.pack(side='left', padx=(0, 15))
+
+        ttk.Label(format_selector_url_frame, text="Format:", style='Custom.TLabel').pack(side='left', padx=(0, 5))
+        self.format_combobox_url = ttk.Combobox(format_selector_url_frame, 
+                                               textvariable=self.download_format_var, 
+                                               values=["MP3", "MP4"], 
+                                               state="readonly", width=5, style='TCombobox')
+        self.format_combobox_url.pack(side='left')
+        self.format_combobox_url.set("MP4") # Valeur par défaut
+        
+        download_url_btn = ttk.Button(url_btn_frame, text="Télécharger", 
+                                     command=self.download_from_url, style='Accent.TButton')
+        download_url_btn.pack(side='right')
+        
+        add_url_to_memory_btn = ttk.Button(url_btn_frame, text="Ajouter à la Mémoire", 
+                                          command=self.add_url_to_memory, style='Custom.TButton')
+        add_url_to_memory_btn.pack(side='right', padx=(0, 10))
+        
         # Section Résultats de recherche
         results_frame = ttk.LabelFrame(left_frame, text="Résultats de Recherche", style='Custom.TLabelframe',
                                        padding=(15, 10, 15, 15))
@@ -305,6 +339,94 @@ class MusicDLGUI:
         self.log_display.insert(tk.END, message + "\n")
         self.log_display.see(tk.END)
         self.log_display.configure(state='disabled')
+
+    # --- NOUVELLES MÉTHODES POUR LE TÉLÉCHARGEMENT PAR URL ---
+    def _validate_youtube_url(self, url: str) -> bool:
+        """Valide si l'URL fournie est une URL YouTube valide."""
+        youtube_patterns = [
+            r'https?://(www\.)?youtube\.com/watch\?v=',
+            r'https?://(www\.)?youtu\.be/',
+            r'https?://(www\.)?youtube\.com/embed/',
+            r'https?://(www\.)?youtube\.com/v/',
+            r'https?://m\.youtube\.com/watch\?v='
+        ]
+        
+        import re
+        for pattern in youtube_patterns:
+            if re.match(pattern, url):
+                return True
+        return False
+
+    def download_from_url(self):
+        """Télécharge directement depuis une URL fournie."""
+        url = self.url_entry.get().strip()
+        if not url:
+            self.log("Veuillez entrer une URL YouTube.")
+            messagebox.showwarning("URL manquante", "Veuillez entrer une URL YouTube à télécharger.")
+            return
+        
+        if not self._validate_youtube_url(url):
+            self.log("URL YouTube invalide.")
+            messagebox.showerror("URL invalide", "L'URL fournie ne semble pas être une URL YouTube valide.")
+            return
+        
+        download_format = self.download_format_var.get()
+        is_audio_only = (download_format == "MP3")
+        
+        self.log(f"Téléchargement direct en format {download_format} de: {url}")
+        
+        def download_callback(success_count, total_count):
+            if success_count > 0:
+                self.log("Téléchargement direct terminé avec succès.")
+                messagebox.showinfo("Téléchargement Terminé", "Le téléchargement a été effectué avec succès!")
+                # Vider le champ URL après un téléchargement réussi
+                self.url_entry.delete(0, tk.END)
+            else:
+                self.log("Échec du téléchargement direct.")
+                messagebox.showerror("Échec du Téléchargement", "Le téléchargement a échoué. Vérifiez les logs pour plus de détails.")
+        
+        self.downloader.download_items_in_bulk([url], is_audio_only=is_audio_only, callback=download_callback)
+
+    def add_url_to_memory(self):
+        """Ajoute l'URL directement à la mémoire avec un titre générique."""
+        url = self.url_entry.get().strip()
+        if not url:
+            self.log("Veuillez entrer une URL YouTube.")
+            messagebox.showwarning("URL manquante", "Veuillez entrer une URL YouTube à ajouter à la mémoire.")
+            return
+        
+        if not self._validate_youtube_url(url):
+            self.log("URL YouTube invalide.")
+            messagebox.showerror("URL invalide", "L'URL fournie ne semble pas être une URL YouTube valide.")
+            return
+        
+        # Extraire l'ID de la vidéo depuis l'URL pour créer un titre plus informatif
+        import re
+        video_id = None
+        patterns = [
+            r'[?&]v=([^&]+)',  # youtube.com/watch?v=ID
+            r'youtu\.be/([^?]+)',  # youtu.be/ID
+            r'/embed/([^?]+)',  # youtube.com/embed/ID
+            r'/v/([^?]+)'  # youtube.com/v/ID
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                video_id = match.group(1)
+                break
+        
+        title = f"Vidéo YouTube - {video_id}" if video_id else "Vidéo YouTube (URL directe)"
+        
+        if self.memory.add_item(title, url, "Inconnue"):
+            self.log(f"URL ajoutée à la mémoire: {url}")
+            self.update_memory_display()
+            # Vider le champ URL après ajout réussi
+            self.url_entry.delete(0, tk.END)
+            messagebox.showinfo("Ajout Réussi", "L'URL a été ajoutée à la mémoire avec succès!")
+        else:
+            self.log(f"Échec de l'ajout de l'URL à la mémoire: {url}")
+            messagebox.showerror("Échec de l'Ajout", "Impossible d'ajouter l'URL à la mémoire.")
 
     def check_and_offer_yt_dlp_install(self): 
         """Vérifie si yt-dlp est installé et le propose d'installer si non."""

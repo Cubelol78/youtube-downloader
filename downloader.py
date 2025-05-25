@@ -1,3 +1,4 @@
+# downloader.py
 import os
 import sys
 import subprocess
@@ -90,108 +91,120 @@ class Downloader:
         self.ffmpeg_path = None
         return False
 
-    def download_audio(self, url: str) -> bool:
-        """Télécharger l'audio d'une vidéo YouTube."""
+    def _download_single_item(self, url: str, target_format: str) -> bool:
+        """
+        Télécharge une URL unique avec yt-dlp et la convertit si nécessaire
+        vers le format spécifié.
+        """
         if not self.yt_dlp_path:
-            self.log("yt-dlp n'est pas configuré. Impossible de télécharger.")
+            self.log("Erreur: yt-dlp n'est pas installé ou introuvable.")
             return False
 
-        self.log(f"Téléchargement audio de: {url} vers {self.download_path}")
+        if not os.path.exists(self.download_path):
+            os.makedirs(self.download_path, exist_ok=True)
+
+        # Commande de base
+        cmd = [
+            self.yt_dlp_path,
+            "--no-playlist",
+            "--no-mtime",
+            "--no-write-thumbnail",
+            "--no-write-sub",
+            "--no-write-info-json",
+            "--no-check-certificate",
+            "--prefer-free-formats",
+            "-o", os.path.join(self.download_path, "%(title)s.%(ext)s"),
+            url
+        ]
+
+        # Logique de formatage avec yt-dlp
+        audio_formats = ["MP3", "WAV", "FLAC", "AAC", "OGG"]
+        video_formats = ["MP4", "WEBM", "MKV"]
+
+        if target_format.upper() in audio_formats:
+            if not self.ffmpeg_path:
+                self.log(f"Erreur: FFmpeg est nécessaire pour la conversion en {target_format} et n'est pas trouvé.")
+                return False
+            cmd.extend(['-x']) # Activer l'extraction audio
+
+            if target_format.upper() == "MP3":
+                cmd.extend(['--audio-format', 'mp3', '--audio-quality', '0'])
+            elif target_format.upper() == "WAV":
+                cmd.extend(['--audio-format', 'wav'])
+            elif target_format.upper() == "FLAC":
+                cmd.extend(['--audio-format', 'flac'])
+            elif target_format.upper() == "AAC":
+                # yt-dlp tends to use m4a for AAC. This is correct.
+                cmd.extend(['--audio-format', 'aac'])
+            elif target_format.upper() == "OGG":
+                # For OGG, yt-dlp usually prefers 'opus' or 'vorbis'
+                # or you can set a post-processor to convert to ogg after extraction.
+                # A common approach is to extract as best audio and then convert.
+                # Or, tell yt-dlp to output to 'opus' which commonly goes into .ogg
+                cmd.extend(['--audio-format', 'opus']) # yt-dlp will often put Opus in an OGG container
+                self.log("Tentative de téléchargement OGG avec le codec Opus. Le fichier aura probablement une extension .ogg.")
+        elif target_format.upper() == "MP4":
+            cmd.extend(['-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', '--merge-output-format', 'mp4'])
+        elif target_format.upper() == "WEBM":
+            cmd.extend(['-f', 'bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]/best', '--merge-output-format', 'webm'])
+        elif target_format.upper() == "MKV":
+            cmd.extend(['-f', 'bestvideo+bestaudio/best', '--merge-output-format', 'mkv'])
+        else:
+            self.log(f"Format de téléchargement '{target_format}' non pris en charge directement par le script. Téléchargement du format par défaut de yt-dlp.")
+            # Laisser yt-dlp choisir le meilleur format par défaut si non spécifié
+
+        # Si un chemin FFmpeg spécifique est trouvé (et n'est pas juste "ffmpeg"), l'ajouter à la commande
+        if self.ffmpeg_path and self.ffmpeg_path != "ffmpeg":
+            cmd.insert(1, "--ffmpeg-location")
+            cmd.insert(2, self.ffmpeg_path)
+
+        self.log(f"Début du téléchargement en {target_format} pour: {url}")
         try:
-            # Commande de base pour le téléchargement audio
-            cmd = [
-                self.yt_dlp_path,
-                "-x", # Extraire l'audio
-                "--audio-format", "mp3", # Convertir en mp3
-                "--audio-quality", "0", # Meilleure qualité audio
-                "--no-playlist", # Ne pas télécharger de playlist
-                "--no-mtime", # Ne pas modifier la date de modification du fichier
-                "--no-write-thumbnail", # Ne pas écrire de miniature
-                "--no-write-sub", # Ne pas écrire de sous-titres
-                "--no-write-info-json", # Ne pas écrire de fichier info JSON
-                "--no-check-certificate", # Ignorer la vérification du certificat SSL
-                "--prefer-free-formats", # Préférer les formats gratuits (ex: webm)
-                "-o", os.path.join(self.download_path, "%(title)s.%(ext)s"), # Chemin de sortie
-                url
-            ]
-
-            # Si un chemin FFmpeg spécifique est trouvé, l'ajouter à la commande
-            if self.ffmpeg_path and self.ffmpeg_path != "ffmpeg":
-                cmd.insert(1, "--ffmpeg-location")
-                cmd.insert(2, self.ffmpeg_path)
-
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     text=True, encoding='utf-8', errors='replace',
-                                     cwd=self.download_path)
+                                    text=True, encoding='utf-8', errors='replace',
+                                    cwd=self.download_path)
 
             for line in process.stdout:
                 if line.strip():
                     self.log(line.strip())
 
             process.wait()
-            return process.returncode == 0
 
+            if process.returncode == 0:
+                self.log(f"Téléchargement et conversion en {target_format} réussis pour: {url}")
+                return True
+            else:
+                self.log(f"Échec du téléchargement ou de la conversion en {target_format} pour {url}. Code d'erreur: {process.returncode}")
+                return False
+
+        except FileNotFoundError:
+            self.log(f"Erreur: Le programme '{self.yt_dlp_path}' ou 'ffmpeg' n'a pas été trouvé. Vérifiez votre installation et votre PATH.")
+            return False
         except Exception as e:
-            self.log(f"Erreur lors du téléchargement audio: {e}")
+            self.log(f"Une erreur inattendue est survenue lors du téléchargement de {url}: {e}")
             return False
 
-    def download_video(self, url: str) -> bool:
-        """Télécharger une vidéo YouTube."""
-        if not self.yt_dlp_path:
-            self.log("yt-dlp n'est pas configuré. Impossible de télécharger.")
-            return False
-
-        self.log(f"Téléchargement vidéo de: {url} vers {self.download_path}")
-        try:
-            cmd = [
-                self.yt_dlp_path,
-                "--format", "bestvideo+bestaudio/best", # Meilleure qualité vidéo et audio
-                "--merge-output-format", "mp4", # Fusionner en mp4
-                "--no-playlist",
-                "--no-mtime",
-                "--no-write-thumbnail",
-                "--no-write-sub",
-                "--no-write-info-json",
-                "--no-check-certificate",
-                "--prefer-free-formats",
-                "-o", os.path.join(self.download_path, "%(title)s.%(ext)s"),
-                url
-            ]
-            if self.ffmpeg_path and self.ffmpeg_path != "ffmpeg":
-                cmd.insert(1, "--ffmpeg-location")
-                cmd.insert(2, self.ffmpeg_path)
-
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     text=True, encoding='utf-8', errors='replace',
-                                     cwd=self.download_path)
-
-            for line in process.stdout:
-                if line.strip():
-                    self.log(line.strip())
-
-            process.wait()
-            return process.returncode == 0
-
-        except Exception as e:
-            self.log(f"Erreur: {e}")
-            return False
-
-    def download_items_in_bulk(self, urls: list[str], is_audio_only: bool, callback: Callable[[int, int], None]):
-        """Télécharger plusieurs éléments de manière asynchrone."""
+    def download_items_in_bulk(self, urls: list[str], selected_format: str, callback: Callable[[int, int], None]):
+        """
+        Télécharger plusieurs éléments de manière asynchrone, en utilisant le format spécifié.
+        Gère aussi les playlists YouTube.
+        """
         def _download_task():
             success_count = 0
             total_count = len(urls)
+
             for i, url in enumerate(urls):
-                self.log(f"Début du téléchargement {i+1}/{total_count}: {url}")
-                if is_audio_only:
-                    success = self.download_audio(url)
-                else:
-                    success = self.download_video(url)
+                self.log(f"Traitement {i+1}/{total_count}: {url} en {selected_format}...")
+                
+                # yt-dlp gère les playlists directement, il n'est donc pas nécessaire
+                # de boucler sur les vidéos d'une playlist côté Python.
+                # Il suffit de passer l'URL de la playlist à _download_single_item.
+                success = self._download_single_item(url, selected_format)
 
                 if success:
                     success_count += 1
                 else:
-                    self.log(f"Échec du téléchargement pour: {url}")
+                    self.log(f"Échec du traitement pour: {url}")
             callback(success_count, total_count)
 
         threading.Thread(target=_download_task).start()

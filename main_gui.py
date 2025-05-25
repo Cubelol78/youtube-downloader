@@ -747,7 +747,12 @@ class MusicDLGUI:
             return
             
         # Supprimer en ordre inverse pour éviter les problèmes d'index
-        indices_to_remove = sorted([int(self.memory_tree.item(item_id)['iid']) for item_id in selected_items], reverse=True)
+        # Ancien code (qui cause l'erreur) :
+        # indices_to_remove = sorted([int(self.memory_tree.item(item_id)['iid']) for item_id in selected_items], reverse=True)
+        
+        # Nouveau code corrigé :
+        # L'iid est déjà l'item_id lui-même. Nous devons le convertir en int car il a été inséré comme str(i).
+        indices_to_remove = sorted([int(item_id) for item_id in selected_items], reverse=True)
         
         for index in indices_to_remove:
             if self.memory.remove_item(index):

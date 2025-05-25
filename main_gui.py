@@ -188,7 +188,7 @@ class MusicDLGUI:
         ttk.Label(format_selector_url_frame, text="Format:", style='Custom.TLabel').pack(side='left', padx=(0, 5))
         self.format_combobox_url = ttk.Combobox(format_selector_url_frame,
                                                textvariable=self.download_format_var,
-                                               values=["MP3", "MP4", "WAV", "FLAC", "AAC", "OGG", "WEBM", "MKV"], # Nouveaux formats ici
+                                               values=["MP3", "MP4", "WAV", "FLAC", "WEBM", "MKV", "M4A", "OPUS", "MOV", "AVI"], # OGG et AAC retirés
                                                state="readonly", width=5, style='TCombobox')
         self.format_combobox_url.pack(side='left')
         self.format_combobox_url.set("MP4") # Valeur par défaut
@@ -236,7 +236,7 @@ class MusicDLGUI:
         ttk.Label(format_selector_results_frame, text="Format:", style='Custom.TLabel').pack(side='left', padx=(0, 5))
         self.format_combobox_results = ttk.Combobox(format_selector_results_frame,
                                                  textvariable=self.download_format_var,
-                                                 values=["MP3", "MP4", "WAV", "FLAC", "AAC", "OGG", "WEBM", "MKV"], # Nouveaux formats ici
+                                                 values=["MP3", "MP4", "WAV", "FLAC", "WEBM", "MKV", "M4A", "OPUS", "MOV", "AVI"], # OGG et AAC retirés
                                                  state="readonly", width=5, style='TCombobox')
         self.format_combobox_results.pack(side='left')
         self.format_combobox_results.set("MP4") # Valeur par défaut
@@ -277,7 +277,7 @@ class MusicDLGUI:
         ttk.Label(format_selector_memory_frame, text="Format:", style='Custom.TLabel').pack(side='left', padx=(0, 5))
         self.format_combobox_memory = ttk.Combobox(format_selector_memory_frame,
                                                  textvariable=self.download_format_var, # Partage la même variable
-                                                 values=["MP3", "MP4", "WAV", "FLAC", "AAC", "OGG", "WEBM", "MKV"], # Nouveaux formats ici
+                                                 values=["MP3", "MP4", "WAV", "FLAC", "WEBM", "MKV", "M4A", "OPUS", "MOV", "AVI"], # OGG et AAC retirés
                                                  state="readonly", width=5, style='TCombobox')
         self.format_combobox_memory.pack(side='left')
         self.format_combobox_memory.set("MP4") # Valeur par défaut

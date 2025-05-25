@@ -118,8 +118,8 @@ class Downloader:
         ]
 
         # Logique de formatage avec yt-dlp
-        audio_formats = ["MP3", "WAV", "FLAC", "AAC", "OGG"]
-        video_formats = ["MP4", "WEBM", "MKV"]
+        audio_formats = ["MP3", "WAV", "FLAC", "M4A", "OPUS"] # OGG et AAC retirés
+        video_formats = ["MP4", "WEBM", "MKV", "MOV", "AVI"]
 
         if target_format.upper() in audio_formats:
             if not self.ffmpeg_path:
@@ -133,22 +133,26 @@ class Downloader:
                 cmd.extend(['--audio-format', 'wav'])
             elif target_format.upper() == "FLAC":
                 cmd.extend(['--audio-format', 'flac'])
-            elif target_format.upper() == "AAC":
-                # yt-dlp tends to use m4a for AAC. This is correct.
-                cmd.extend(['--audio-format', 'aac'])
-            elif target_format.upper() == "OGG":
-                # For OGG, yt-dlp usually prefers 'opus' or 'vorbis'
-                # or you can set a post-processor to convert to ogg after extraction.
-                # A common approach is to extract as best audio and then convert.
-                # Or, tell yt-dlp to output to 'opus' which commonly goes into .ogg
-                cmd.extend(['--audio-format', 'opus']) # yt-dlp will often put Opus in an OGG container
-                self.log("Tentative de téléchargement OGG avec le codec Opus. Le fichier aura probablement une extension .ogg.")
+            elif target_format.upper() == "M4A":
+                cmd.extend(['--audio-format', 'm4a'])
+            elif target_format.upper() == "OPUS":
+                cmd.extend(['--audio-format', 'opus'])
         elif target_format.upper() == "MP4":
             cmd.extend(['-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', '--merge-output-format', 'mp4'])
         elif target_format.upper() == "WEBM":
             cmd.extend(['-f', 'bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]/best', '--merge-output-format', 'webm'])
         elif target_format.upper() == "MKV":
             cmd.extend(['-f', 'bestvideo+bestaudio/best', '--merge-output-format', 'mkv'])
+        elif target_format.upper() == "MOV":
+            if not self.ffmpeg_path:
+                self.log(f"Erreur: FFmpeg est nécessaire pour la conversion en {target_format} et n'est pas trouvé.")
+                return False
+            cmd.extend(['-f', 'bestvideo+bestaudio/best', '--recode-video', 'mov'])
+        elif target_format.upper() == "AVI":
+            if not self.ffmpeg_path:
+                self.log(f"Erreur: FFmpeg est nécessaire pour la conversion en {target_format} et n'est pas trouvé.")
+                return False
+            cmd.extend(['-f', 'bestvideo+bestaudio/best', '--recode-video', 'avi'])
         else:
             self.log(f"Format de téléchargement '{target_format}' non pris en charge directement par le script. Téléchargement du format par défaut de yt-dlp.")
             # Laisser yt-dlp choisir le meilleur format par défaut si non spécifié

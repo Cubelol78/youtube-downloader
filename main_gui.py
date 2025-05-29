@@ -316,7 +316,7 @@ class MusicDLGUI:
         file_menu.add_command(label="Quitter", command=self.root.quit)
 
         config_menu = tk.Menu(menubar, tearoff=0, bg=BG_MEDIUM, fg=FG_PRIMARY,
-                               activebackground=ACCENT_COLOR, activeforeground='white')
+                             activebackground=ACCENT_COLOR, activeforeground='white')
         menubar.add_cascade(label="Configuration", menu=config_menu)
         config_menu.add_command(label="Configurer la clé API YouTube", command=self.configure_api_key)
 
@@ -344,7 +344,6 @@ class MusicDLGUI:
         self.log_display.see(tk.END)
         self.log_display.configure(state='disabled')
 
-    # --- NOUVELLES MÉTHODES POUR LE TÉLÉCHARGEMENT PAR URL ---
     def _validate_youtube_url(self, url: str) -> bool:
         """Valide si l'URL fournie est une URL YouTube/YouTube Music valide (vidéos individuelles ou playlists)."""
         youtube_patterns = [
@@ -363,7 +362,6 @@ class MusicDLGUI:
             # YouTube Shorts
             r'https?://(www\.)?youtube\.com/shorts/',
         ]
-
         import re
         for pattern in youtube_patterns:
             if re.match(pattern, url):
@@ -373,403 +371,413 @@ class MusicDLGUI:
     def _extract_video_info_from_url(self, url: str) -> dict:
         """Extrait les informations de base depuis une URL YouTube/YouTube Music."""
         import re
-
         # Pour les playlists
         playlist_patterns = [
             r'[&?]list=([^&]+)',
         ]
-
         # Pour les vidéos individuelles
         video_patterns = [
             r'[?&]v=([^&]+)',
-            r'youtu\.be/([^?]+)',
-            r'/embed/([^?]+)',
-            r'/v/([^?]+)',
-            r'/shorts/([^?]+)',
+            r'youtu\.be\/([a-zA-Z0-9_-]{11})', # Pour youtu.be/VIDEO_ID
+            r'youtube\.com\/embed\/([a-zA-Z0-9_-]{11})',
+            r'youtube\.com\/v\/([a-zA-Z0-9_-]{11})',
+            r'youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})',
         ]
 
-        # Vérifier si c'est une playlist
-        for pattern in playlist_patterns:
-            match = re.search(pattern, url)
-            if match:
-                playlist_id = match.group(1)
-                # Vérifier si c'est aussi une vidéo spécifique dans la playlist
-                video_id = None
-                for video_pattern in video_patterns:
-                    video_match = re.search(video_pattern, url)
-                    if video_match:
-                        video_id = video_match.group(1)
-                        break
+        # Essayer d'extraire le titre et la durée en utilisant youtube-dlp (sans téléchargement)
+        try:
+            # Utilisez stdout=subprocess.PIPE pour ne pas afficher la sortie de la console
+            # Utilisez CREATE_NO_WINDOW sur Windows pour éviter l'ouverture d'une fenêtre de console
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NO_WINDOW
 
-                if video_id:
-                    return {
-                        'type': 'video_in_playlist',
-                        'video_id': video_id,
-                        'playlist_id': playlist_id,
-                        'title': f'Vidéo {video_id} (Playlist {playlist_id})'
-                    }
-                else:
-                    return {
-                        'type': 'playlist',
-                        'playlist_id': playlist_id,
-                        'title': f'Playlist YouTube - {playlist_id}'
-                    }
+            process = subprocess.run(
+                [self.downloader.yt_dlp_path, "--get-title", "--get-duration", "--restrict-filenames", url],
+                check=True,
+                capture_output=True,
+                text=True,
+                creationflags=creationflags
+            )
+            output_lines = process.stdout.strip().split('\n')
+            if len(output_lines) >= 2:
+                title = output_lines[0].strip()
+                duration_str = output_lines[1].strip()
 
-        # Vérifier si c'est une vidéo individuelle
-        for pattern in video_patterns:
-            match = re.search(pattern, url)
-            if match:
-                video_id = match.group(1)
-                # Déterminer la source
-                source = "YouTube Music" if "music.youtube.com" in url else "YouTube" # Correction pour identifier YouTube Music
-                return {
-                    'type': 'video',
-                    'video_id': video_id,
-                    'title': f'Vidéo {source} - {video_id}'
-                }
+                # yt-dlp retourne la durée en secondes pour --get-duration
+                # Convertir les secondes en HH:MM:SS
+                try:
+                    total_seconds = int(duration_str)
+                    hours = total_seconds // 3600
+                    minutes = (total_seconds % 3600) // 60
+                    seconds = total_seconds % 60
+                    duration = f"{hours:02}:{minutes:02}:{seconds:02}"
+                except ValueError:
+                    duration = "00:00:00" # Fallback si la conversion échoue
 
-        # Fallback
-        return {
-            'type': 'unknown',
-            'title': 'Contenu YouTube (URL directe)'
-        }
-
-    def download_from_url(self):
-        """Télécharge directement depuis une URL fournie (vidéos, playlists, YouTube Music)."""
-        url = self.url_entry.get().strip()
-        if not url:
-            self.log("Veuillez entrer une URL YouTube.")
-            messagebox.showwarning("URL manquante", "Veuillez entrer une URL YouTube à télécharger.")
-            return
-
-        if not self._validate_youtube_url(url):
-            self.log("URL YouTube invalide.")
-            messagebox.showerror("URL invalide", "L'URL fournie ne semble pas être une URL YouTube/YouTube Music valide.")
-            return
-
-        # Extraire les informations de l'URL
-        url_info = self._extract_video_info_from_url(url)
-
-        download_format = self.download_format_var.get()
-        # Plus besoin de is_audio_only, le format est passé directement
-
-        # Messages différents selon le type de contenu
-        if url_info['type'] == 'playlist':
-            self.log(f"Téléchargement de playlist en format {download_format}: {url}")
-            messagebox.showinfo("Playlist détectée",
-                            f"Une playlist a été détectée. Le téléchargement peut prendre du temps selon le nombre de vidéos.\n"
-                            f"Format: {download_format}")
-        elif url_info['type'] == 'video_in_playlist':
-            self.log(f"Téléchargement de vidéo spécifique dans playlist en format {download_format}: {url}")
-        else:
-            self.log(f"Téléchargement direct en format {download_format} de: {url}")
-
-        def download_callback(success_count, total_count):
-            if success_count > 0:
-                if url_info['type'] == 'playlist':
-                    self.log(f"Téléchargement de playlist terminé: {success_count}/{total_count} vidéos réussies.")
-                    messagebox.showinfo("Téléchargement Terminé",
-                                    f"Playlist téléchargée: {success_count}/{total_count} vidéos réussies!")
-                else:
-                    self.log("Téléchargement direct terminé avec succès.")
-                    messagebox.showinfo("Téléchargement Terminé", "Le téléchargement a été effectué avec succès!")
-                # Vider le champ URL après un téléchargement réussi
-                self.url_entry.delete(0, tk.END)
+                self.log(f"Informations extraites: Titre='{title}', Durée='{duration}'")
+                return {"title": title, "url": url, "duration": duration}
             else:
-                self.log("Échec du téléchargement direct.")
-                messagebox.showerror("Échec du Téléchargement", "Le téléchargement a échoué. Vérifiez les logs pour plus de détails.")
-
-        self.downloader.download_items_in_bulk([url], download_format, callback=download_callback) # Passer le format
+                self.log(f"Impossible d'extraire les informations pour l'URL: {url}. Sortie: {process.stdout.strip()}")
+                return {"title": "Titre inconnu", "url": url, "duration": "00:00:00"}
+        except FileNotFoundError:
+            self.log("Erreur: yt-dlp n'est pas trouvé. Impossible d'extraire les informations.")
+            return {"title": "Titre inconnu (yt-dlp non trouvé)", "url": url, "duration": "00:00:00"}
+        except subprocess.CalledProcessError as e:
+            self.log(f"Erreur lors de l'exécution de yt-dlp pour extraire les infos: {e.stderr}")
+            return {"title": "Titre inconnu (erreur yt-dlp)", "url": url, "duration": "00:00:00"}
+        except Exception as e:
+            self.log(f"Erreur inattendue lors de l'extraction des informations: {e}")
+            return {"title": "Titre inconnu (erreur)", "url": url, "duration": "00:00:00"}
 
     def add_url_to_memory(self):
-        """Ajoute l'URL directement à la mémoire avec un titre informatif."""
         url = self.url_entry.get().strip()
         if not url:
-            self.log("Veuillez entrer une URL YouTube.")
-            messagebox.showwarning("URL manquante", "Veuillez entrer une URL YouTube à ajouter à la mémoire.")
+            messagebox.showwarning("Ajouter à la Mémoire", "Veuillez entrer une URL.")
             return
 
         if not self._validate_youtube_url(url):
-            self.log("URL YouTube invalide.")
-            messagebox.showerror("URL invalide", "L'URL fournie ne semble pas être une URL YouTube/YouTube Music valide.")
+            messagebox.showwarning("URL Invalide", "L'URL fournie n'est pas une URL YouTube/YouTube Music valide.")
             return
 
-        # Extraire les informations de l'URL
-        url_info = self._extract_video_info_from_url(url)
-        title = url_info['title']
+        self.log(f"Tentative d'extraction des informations pour: {url}")
+        # Exécuter l'extraction dans un thread pour ne pas bloquer l'UI
+        threading.Thread(target=self._add_url_to_memory_task, args=(url,)).start()
 
-        # Message d'avertissement pour les playlists
-        if url_info['type'] == 'playlist':
-            if not messagebox.askyesno("Playlist détectée",
-                                    "Vous ajoutez une playlist entière à la mémoire. "
-                                    "Cela téléchargera toutes les vidéos de la playlist lors du téléchargement.\n\n"
-                                    "Voulez-vous continuer ?"):
-                return
-            title = f"🎵 {title}"  # Icône pour identifier les playlists
-        elif url_info['type'] == 'video_in_playlist':
-            title = f"📹 {title}"  # Icône pour vidéo dans playlist
-        elif "music.youtube.com" in url: # Vérification correcte pour YouTube Music
-            title = f"🎶 {title}"  # Icône pour YouTube Music
-
-        if self.memory.add_item(title, url, "Inconnue"):
-            self.log(f"URL ajoutée à la mémoire: {url}")
-            self.update_memory_display()
-            # Vider le champ URL après ajout réussi
-            self.url_entry.delete(0, tk.END)
-            messagebox.showinfo("Ajout Réussi", "L'URL a été ajoutée à la mémoire avec succès!")
-        else:
-            self.log(f"Échec de l'ajout de l'URL à la mémoire: {url}")
-            messagebox.showerror("Échec de l'Ajout", "Impossible d'ajouter l'URL à la mémoire.")
-
-    def check_and_offer_yt_dlp_install(self):
-        """Vérifie si yt-dlp est installé et le propose d'installer si non."""
-        self.log("Vérification de yt-dlp...")
-        if not self.downloader.check_yt_dlp_installed():
-            self.log("yt-dlp n'est pas installé ou introuvable. Installation recommandée.")
-            if messagebox.askyesno("Installation de yt-dlp", "yt-dlp n'est pas trouvé. Voulez-vous l'installer maintenant ?"):
-                self.log("La fonctionnalité d'installation automatique de yt-dlp n'est pas implémentée.")
-                messagebox.showwarning("Installation manuelle", "Veuillez télécharger yt-dlp manuellement depuis leur GitHub et l'ajouter à votre PATH.")
-            else:
-                self.log("L'installation de yt-dlp a été annulée. Certaines fonctionnalités pourraient ne pas fonctionner.")
-        else:
-            self.log("yt-dlp est déjà installé et accessible.")
-
-    def check_yt_dlp(self):
-        """Vérifie et affiche le statut de yt-dlp."""
-        self.log("Vérification du statut de yt-dlp...")
-        if self.downloader.check_yt_dlp_installed():
-            self.log("yt-dlp est installé et accessible.")
-        else:
-            self.log("yt-dlp n'est pas installé ou n'a pas pu être trouvé.")
-
-    def install_yt_dlp(self):
-        """Lance l'installation de yt-dlp dans un thread séparé."""
-        self.log("Cette fonction n'est pas implémentée pour l'installation automatique de yt-dlp.")
-        messagebox.showwarning("Installation manuelle", "Veuillez télécharger yt-dlp manuellement depuis leur GitHub et l'ajouter à votre PATH.")
-
-    def on_yt_dlp_install_complete(self, success: bool):
-        """Callback après l'installation de yt-dlp."""
-        if success:
-            self.log("yt-dlp a été installé avec succès.")
-            messagebox.showinfo("Installation réussie", "yt-dlp a été installé avec succès!")
-            self.root.after(0, self.check_and_offer_ffmpeg_install)
-        else:
-            self.log("Échec de l'installation de yt-dlp.")
-            messagebox.showerror("Erreur d'installation", "Échec de l'installation de yt-dlp. Veuillez vérifier les logs.")
-
-    def check_and_offer_ffmpeg_install(self):
-        """Vérifie si FFmpeg est installé et le propose d'installer si non."""
-        self.log("Vérification de FFmpeg...")
-        if not self.downloader.check_ffmpeg_installed():
-            self.log("FFmpeg n'est pas installé ou introuvable. Nécessaire pour la conversion MP3.")
-            if messagebox.askyesno("Installation de FFmpeg",
-                                   "FFmpeg n'est pas trouvé sur votre système, ce qui est nécessaire pour convertir les vidéos en MP3.\nVoulez-vous ouvrir la page de téléchargement de FFmpeg maintenant ?\nVous devrez télécharger FFmpeg et le placer manuellement dans le dossier './ffmpeg/bin' à côté de l'exécutable de l'application."
-                                   ):
-                self.offer_ffmpeg_install()
-            else:
-                self.log("L'installation de FFmpeg a été annulée. Les téléchargements seront effectués au format d'origine (ex: WebM) si possible.")
-        else:
-            self.log("FFmpeg est déjà installé et accessible.")
-
-    def check_ffmpeg_status(self):
-        """Affiche le statut de FFmpeg."""
-        self.log("Vérification du statut de FFmpeg...")
-        if self.downloader.check_ffmpeg_installed():
-            self.log("FFmpeg est installé et accessible.")
-        else:
-            self.log("FFmpeg n'est pas installé ou n'a pas pu être trouvé.")
-            messagebox.showwarning("FFmpeg manquant", "FFmpeg n'est pas installé ou introuvable.\nLa conversion en MP3 ne fonctionnera pas sans lui.")
-            self.offer_ffmpeg_install()
-
-    def offer_ffmpeg_install(self):
-        """Ouvre le navigateur sur la page de téléchargement de FFmpeg."""
-        self.log("Ouverture de la page de téléchargement de FFmpeg...")
-        webbrowser.open("https://ffmpeg.org/download.html")
-        messagebox.showinfo("Instructions FFmpeg",
-                            "Veuillez télécharger FFmpeg depuis la page qui s'est ouverte dans votre navigateur.\n\n"
-                            "Après le téléchargement, vous devrez l'extraire et placer le contenu du dossier 'bin' de FFmpeg dans le dossier './ffmpeg/bin' à côté du fichier 'main.py' ou de l'exécutable de l'application."
-                           )
-
-    def check_google_api_client(self):
-        """Vérifie si google-api-python-client est installé."""
-        self.log("Vérification de google-api-python-client...")
-        if GOOGLE_API_AVAILABLE:
-            self.log("google-api-python-client est déjà installé.")
-            if not self.youtube_api.is_available():
-                self.log("Clé API YouTube non configurée ou invalide. La recherche YouTube ne fonctionnera pas.")
-        else:
-            self.log("google-api-python-client n'est pas installé. La recherche YouTube ne fonctionnera pas.")
-            if messagebox.askyesno("Installation Google API", "Le client Google API n'est pas trouvé. Voulez-vous l'installer ?"):
-                self.install_google_api_client()
-
-    def install_google_api_client(self):
-        """Installe google-api-python-client."""
-        self.log("Tentative d'installation de Google API...")
+    def _add_url_to_memory_task(self, url: str):
         try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "google-api-python-client"])
-            self.log("google-api-python-client installé avec succès!")
-            self.root.after(0, lambda: messagebox.showinfo("Installation réussie",
-                "Google API Python Client installé!\nRedémarrez l'application pour activer la recherche YouTube."))
-        except subprocess.CalledProcessError:
-            self.log("Erreur lors de l'installation de google-api-python-client")
-            self.root.after(0, lambda: messagebox.showerror("Erreur d'installation",
-                "Impossible d'installer google-api-python-client automatiquement.\nVeuillez l'installer manuellement avec:\npip install google-api-python-client"))
-
-    def configure_api_key(self):
-        """Configurer la clé API YouTube"""
-        dialog = APIKeyDialog(self.root, self.config.api_key)
-        self.root.wait_window(dialog.dialog)
-
-        if dialog.result:
-            self.config.set_api_key(dialog.result)
-            self.youtube_api.set_api_key(dialog.result)
-
-            if self.youtube_api.is_available():
-                self.log("Clé API YouTube configurée avec succès!")
+            info = self._extract_video_info_from_url(url)
+            if info and info["title"] != "Titre inconnu" and info["duration"] != "00:00:00":
+                if self.memory.add_item(info["title"], info["url"], info["duration"]):
+                    self.log(f"Ajouté à la mémoire: {info['title']}")
+                    self.root.after(0, self.update_memory_display)
+                else:
+                    self.log(f"Échec de l'ajout à la mémoire: {info['title']}")
             else:
-                self.log("Erreur avec la clé API fournie")
+                self.log(f"Impossible d'obtenir des informations valides pour l'URL: {url}. Non ajouté.")
+                self.root.after(0, lambda: messagebox.showerror("Erreur d'extraction", "Impossible d'extraire les informations de la vidéo pour l'URL fournie. Veuillez vérifier l'URL ou votre connexion Internet."))
+        except Exception as e:
+            self.log(f"Erreur lors de l'ajout de l'URL à la mémoire: {e}")
+            self.root.after(0, lambda: messagebox.showerror("Erreur", f"Une erreur est survenue: {e}"))
+
 
     def perform_Youtube(self):
-        """Lance une recherche YouTube."""
         query = self.search_entry.get().strip()
         if not query:
-            self.log("Veuillez entrer un terme de recherche.")
+            messagebox.showwarning("Recherche YouTube", "Veuillez entrer un terme de recherche.")
             return
 
         if not self.youtube_api.is_available():
-            self.log("L'API YouTube n'est pas configurée ou accessible. Veuillez vérifier votre clé API et l'installation du client Google API.")
-            messagebox.showerror("API YouTube non disponible", "L'API YouTube n'est pas configurée ou accessible.")
+            messagebox.showwarning("API YouTube", "La clé API YouTube n'est pas configurée ou est invalide. La recherche ne fonctionnera pas.")
+            self.log("Erreur: Clé API YouTube manquante ou invalide.")
             return
 
-        self.log(f"Recherche YouTube pour: '{query}'...")
+        self.log(f"Recherche de '{query}' sur YouTube...")
+        # Exécuter la recherche dans un thread pour ne pas bloquer l'UI
+        threading.Thread(target=self._perform_Youtube_task, args=(query,)).start()
+
+    def _perform_Youtube_task(self, query: str):
+        try:
+            results = self.youtube_api.search_videos(query)
+            self.search_results = results # Stocker les résultats pour référence
+            self.root.after(0, lambda: self.update_results_display(results))
+            self.log(f"Recherche terminée. {len(results)} résultats trouvés.")
+        except Exception as e:
+            self.log(f"Erreur lors de la recherche YouTube: {e}")
+            self.root.after(0, lambda: messagebox.showerror("Erreur de Recherche", f"Une erreur est survenue lors de la recherche: {e}"))
+
+    def update_results_display(self, results: list):
         # Effacer les résultats précédents
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
-        self.search_results = []
 
-        def search_thread():
-            try:
-                results = self.youtube_api.search_videos(query)
-                self.root.after(0, lambda: self.display_search_results(results))
-            except Exception as e:
-                self.root.after(0, lambda: self.log(f"Erreur lors de la recherche: {e}"))
-                self.root.after(0, lambda: messagebox.showerror("Erreur de recherche", f"Erreur lors de la recherche: {e}"))
+        # Afficher les nouveaux résultats
+        for item in results:
+            self.results_tree.insert("", "end", values=(item['id'], item['title'], item['duration']), tags=('clickable_row',))
+        self.results_tree.tag_bind('clickable_row', '<Double-1>', self.on_results_double_click)
 
-        threading.Thread(target=search_thread, daemon=True).start()
 
-    def display_search_results(self, results: list):
-        """Affiche les résultats de la recherche dans le Treeview."""
-        self.search_results = results
-        for i, item in enumerate(self.search_results):
-            self.results_tree.insert("", "end", iid=str(i),
-                                     values=(item['id'], item['title'], item['duration']))
-        self.log(f"Recherche terminée. {len(results)} résultats trouvés.")
+    def update_memory_display(self):
+        # Effacer les éléments précédents
+        for item in self.memory_tree.get_children():
+            self.memory_tree.delete(item)
 
-    def add_selected_to_memory(self):
-        """Ajoute les éléments sélectionnés des résultats de recherche à la mémoire."""
-        selected_items = self.results_tree.selection()
-        if not selected_items:
-            self.log("Aucun élément sélectionné dans les résultats de recherche.")
+        # Afficher les nouveaux éléments de la mémoire
+        memory_items = self.memory.get_memory()
+        for i, item in enumerate(memory_items):
+            self.memory_tree.insert("", "end", iid=str(i), values=(i + 1, item['title'], item['duration']), tags=('clickable_row',))
+        self.memory_tree.tag_bind('clickable_row', '<Double-1>', self.on_memory_double_click)
+
+    def on_results_double_click(self, event):
+        item_id = self.results_tree.selection()[0]
+        item_values = self.results_tree.item(item_id, 'values')
+        # L'ID affiché est item_values[0], mais l'index réel est item_values[0] - 1
+        selected_result_index = int(item_values[0]) - 1
+        
+        if 0 <= selected_result_index < len(self.search_results):
+            selected_item = self.search_results[selected_result_index]
+            self.url_entry.delete(0, tk.END)
+            self.url_entry.insert(0, selected_item['url'])
+            messagebox.showinfo("Sélection", f"URL copiée: {selected_item['title']}")
+        else:
+            self.log(f"Erreur: Index de résultat de recherche invalide: {selected_result_index}")
+
+
+    def on_memory_double_click(self, event):
+        item_id = self.memory_tree.selection()[0]
+        # L'item_id de la mémoire correspond directement à l'index si inséré avec iid=str(i)
+        selected_memory_index = int(item_id)
+        
+        if 0 <= selected_memory_index < len(self.memory.get_memory()):
+            selected_item = self.memory.get_item(selected_memory_index)
+            self.url_entry.delete(0, tk.END)
+            self.url_entry.insert(0, selected_item['url'])
+            messagebox.showinfo("Sélection", f"URL copiée: {selected_item['title']}")
+        else:
+            self.log(f"Erreur: Index de mémoire invalide: {selected_memory_index}")
+
+
+    def download_from_url(self):
+        url = self.url_entry.get().strip()
+        selected_format = self.download_format_var.get().lower()
+
+        if not url:
+            messagebox.showwarning("Téléchargement", "Veuillez entrer une URL.")
             return
 
-        for item_id in selected_items:
-            index = int(item_id)
-            if 0 <= index < len(self.search_results):
-                item_data = self.search_results[index]
-                if self.memory.add_item(item_data['title'], item_data['url'], item_data['duration']):
-                    self.log(f"Ajouté à la mémoire: {item_data['title']}")
-                else:
-                    self.log(f"Échec de l'ajout à la mémoire: {item_data['title']}")
-        self.update_memory_display()
+        if not self._validate_youtube_url(url):
+            messagebox.showwarning("URL Invalide", "L'URL fournie n'est pas une URL YouTube/YouTube Music valide.")
+            return
 
-    def download_selected_from_results(self):
-        """Télécharge les éléments sélectionnés des résultats de recherche."""
+        if not self.downloader.yt_dlp_path:
+            messagebox.showwarning("yt-dlp introuvable", "yt-dlp n'est pas configuré. Impossible de télécharger. Veuillez l'installer via le menu Aide.")
+            return
+        
+        if (selected_format == "mp3" or selected_format == "wav") and not self.downloader.ffmpeg_path:
+            messagebox.showwarning("FFmpeg introuvable", "FFmpeg n'est pas configuré. Impossible de convertir en MP3/WAV. Veuillez l'installer via le menu Aide.")
+            return
+
+        self.log(f"Préparation du téléchargement de l'URL: {url} au format {selected_format}...")
+        # Lancer le téléchargement dans un thread séparé
+        threading.Thread(target=lambda: self._download_single_url_task(url, selected_format)).start()
+
+    def _download_single_url_task(self, url: str, selected_format: str):
+        success = self.downloader._download_single_item(url, selected_format)
+        self.root.after(0, lambda: self.on_download_complete(success))
+
+
+    def add_selected_to_memory(self):
         selected_items = self.results_tree.selection()
         if not selected_items:
-            self.log("Aucun élément sélectionné pour le téléchargement.")
+            messagebox.showwarning("Ajouter à la Mémoire", "Veuillez sélectionner au moins un élément dans les résultats de recherche.")
+            return
+
+        success_count = 0
+        for item_id in selected_items:
+            item_values = self.results_tree.item(item_id, 'values')
+            selected_result_index = int(item_values[0]) - 1 # Récupérer l'index original
+            
+            if 0 <= selected_result_index < len(self.search_results):
+                item_data = self.search_results[selected_result_index]
+                if self.memory.add_item(item_data['title'], item_data['url'], item_data['duration']):
+                    success_count += 1
+                else:
+                    self.log(f"Échec de l'ajout à la mémoire (doublon ou erreur): {item_data['title']}")
+            else:
+                self.log(f"Erreur: Index de résultat de recherche invalide lors de l'ajout à la mémoire: {selected_result_index}")
+
+        if success_count > 0:
+            messagebox.showinfo("Ajouter à la Mémoire", f"{success_count} élément(s) ajouté(s) à la mémoire.")
+            self.update_memory_display()
+        else:
+            messagebox.showwarning("Ajouter à la Mémoire", "Aucun élément n'a été ajouté (peut-être déjà présent ou erreur).")
+
+
+    def download_selected_from_results(self):
+        selected_items = self.results_tree.selection()
+        if not selected_items:
+            messagebox.showwarning("Téléchargement", "Veuillez sélectionner au moins un élément dans les résultats de recherche.")
+            return
+
+        selected_format = self.download_format_var.get().lower()
+
+        if not self.downloader.yt_dlp_path:
+            messagebox.showwarning("yt-dlp introuvable", "yt-dlp n'est pas configuré. Impossible de télécharger. Veuillez l'installer via le menu Aide.")
+            return
+        
+        if (selected_format == "mp3" or selected_format == "wav") and not self.downloader.ffmpeg_path:
+            messagebox.showwarning("FFmpeg introuvable", "FFmpeg n'est pas configuré. Impossible de convertir en MP3/WAV. Veuillez l'installer via le menu Aide.")
             return
 
         urls_to_download = []
         for item_id in selected_items:
-            index = int(item_id)
-            if 0 <= index < len(self.search_results):
-                urls_to_download.append(self.search_results[index]['url'])
+            item_values = self.results_tree.item(item_id, 'values')
+            selected_result_index = int(item_values[0]) - 1
+            if 0 <= selected_result_index < len(self.search_results):
+                urls_to_download.append(self.search_results[selected_result_index]['url'])
 
         if urls_to_download:
-            download_format = self.download_format_var.get()
-            # Plus besoin de is_audio_only, le format est passé directement
+            self.log(f"Préparation du téléchargement de {len(urls_to_download)} éléments sélectionnés...")
+            self.downloader.download_items_in_bulk(urls_to_download, selected_format, self.on_multiple_download_complete)
+        else:
+            messagebox.showwarning("Téléchargement", "Aucune URL valide sélectionnée pour le téléchargement.")
 
-            self.log(f"Préparation au téléchargement de {len(urls_to_download)} éléments en format {download_format}...")
-            self.downloader.download_items_in_bulk(urls_to_download, download_format, callback=self.on_multiple_download_complete) # Passer le format
-
-    def update_memory_display(self):
-        """Met à jour l'affichage de la mémoire."""
-        for item in self.memory_tree.get_children():
-            self.memory_tree.delete(item)
-
-        memory_data = self.memory.get_memory()
-        for i, item in enumerate(memory_data):
-            self.memory_tree.insert("", "end", iid=str(i),
-                                    values=(i+1, item['title'], item['duration']))
-
-    def download_all_from_memory(self):
-        """Télécharge toutes les URLs de la mémoire (gère les playlists)."""
-        urls = self.memory.get_urls()
-        if not urls:
-            self.log("La mémoire est vide. Rien à télécharger.")
-            return
-
-        # Compter les playlists pour avertir l'utilisateur
-        playlist_count = 0
-        for url in urls:
-            url_info = self._extract_video_info_from_url(url)
-            if url_info['type'] == 'playlist':
-                playlist_count += 1
-
-        if playlist_count > 0:
-            if not messagebox.askyesno("Playlists détectées",
-                                    f"Votre mémoire contient {playlist_count} playlist(s). "
-                                    f"Le téléchargement peut prendre beaucoup de temps.\n\n"
-                                    f"Total d'éléments en mémoire: {len(urls)}\n"
-                                    f"Voulez-vous continuer ?"):
-                return
-
-        download_format = self.download_format_var.get()
-        # Plus besoin de is_audio_only, le format est passé directement
-
-        self.log(f"Téléchargement de tous les {len(urls)} éléments de la mémoire en format {download_format}...")
-        if playlist_count > 0:
-            self.log(f"Attention: {playlist_count} playlist(s) détectée(s), le téléchargement peut être long.")
-
-        self.downloader.download_items_in_bulk(urls, download_format, callback=self.on_multiple_download_complete) # Passer le format
 
     def remove_selected_from_memory(self):
-        """Supprime les éléments sélectionnés de la mémoire."""
         selected_items = self.memory_tree.selection()
         if not selected_items:
-            self.log("Aucun élément sélectionné dans la mémoire à supprimer.")
+            messagebox.showwarning("Supprimer de la Mémoire", "Veuillez sélectionner au moins un élément à supprimer.")
             return
 
-        # Supprimer en ordre inverse pour éviter les problèmes d'index
-        # L'iid est déjà l'item_id lui-même. Nous devons le convertir en int car il a été inséré comme str(i).
-        indices_to_remove = sorted([int(item_id) for item_id in selected_items], reverse=True)
-
+        # Supprimer en ordre décroissant pour éviter les problèmes d'index
+        indices_to_remove = sorted([int(self.memory_tree.item(item_id)['iid']) for item_id in selected_items], reverse=True)
+        
+        success_count = 0
         for index in indices_to_remove:
             if self.memory.remove_item(index):
-                self.log(f"Élément supprimé de la mémoire (index: {index+1}).")
+                success_count += 1
             else:
-                self.log(f"Échec de la suppression de l'élément à l'index {index+1}.")
-        self.update_memory_display()
+                self.log(f"Échec de la suppression de l'élément à l'index {index}.")
+
+        if success_count > 0:
+            messagebox.showinfo("Supprimer de la Mémoire", f"{success_count} élément(s) supprimé(s) de la mémoire.")
+            self.update_memory_display()
+        else:
+            messagebox.showwarning("Supprimer de la Mémoire", "Aucun élément n'a pu être supprimé.")
 
     def clear_all_memory(self):
-        """Vide toute la mémoire."""
-        if messagebox.askyesno("Vider la mémoire", "Êtes-vous sûr de vouloir vider toute la mémoire ? Cette action est irréversible."):
+        if messagebox.askyesno("Vider la Mémoire", "Êtes-vous sûr de vouloir vider toute la mémoire ? Cette action est irréversible."):
             self.memory.clear_memory()
             self.update_memory_display()
             self.log("Toute la mémoire a été vidée.")
+            messagebox.showinfo("Vider la Mémoire", "La mémoire a été entièrement vidée.")
+
+    def download_all_from_memory(self):
+        urls_to_download = self.memory.get_urls()
+        if not urls_to_download:
+            messagebox.showwarning("Téléchargement", "La mémoire est vide. Aucun élément à télécharger.")
+            return
+
+        selected_format = self.download_format_var.get().lower()
+
+        if not self.downloader.yt_dlp_path:
+            messagebox.showwarning("yt-dlp introuvable", "yt-dlp n'est pas configuré. Impossible de télécharger. Veuillez l'installer via le menu Aide.")
+            return
+        
+        if (selected_format == "mp3" or selected_format == "wav") and not self.downloader.ffmpeg_path:
+            messagebox.showwarning("FFmpeg introuvable", "FFmpeg n'est pas configuré. Impossible de convertir en MP3/WAV. Veuillez l'installer via le menu Aide.")
+            return
+
+        self.log(f"Préparation du téléchargement de tous les {len(urls_to_download)} éléments de la mémoire...")
+        self.downloader.download_items_in_bulk(urls_to_download, selected_format, self.on_multiple_download_complete)
+
+
+    def configure_api_key(self):
+        current_key = self.config.api_key
+        dialog = APIKeyDialog(self.root, current_key)
+        self.root.wait_window(dialog.dialog)
+        if dialog.result is not None:
+            new_key = dialog.result
+            self.config.set_api_key(new_key)
+            self.config.save_config()
+            self.youtube_api.set_api_key(new_key) # Mettre à jour l'API YouTube
+            self.log("Clé API YouTube sauvegardée.")
+            if self.youtube_api.is_available():
+                messagebox.showinfo("Configuration API", "Clé API YouTube sauvegardée et validée.")
+            else:
+                messagebox.showwarning("Configuration API", "Clé API sauvegardée, mais la connexion à l'API a échoué. Vérifiez votre clé ou votre connexion internet.")
+
+    def check_google_api_client(self):
+        if GOOGLE_API_AVAILABLE:
+            if self.youtube_api.is_available():
+                messagebox.showinfo("Vérification API", "google-api-python-client est installé et la clé API YouTube est configurée correctement.")
+                self.log("API Google YouTube: Disponible et configurée.")
+            else:
+                messagebox.showwarning("Vérification API", "google-api-python-client est installé, mais la clé API YouTube n'est pas configurée ou est invalide. Veuillez la configurer.")
+                self.log("API Google YouTube: Installée mais non configurée/valide.")
+        else:
+            messagebox.showerror("Vérification API", "google-api-python-client n'est pas installé. La recherche YouTube ne fonctionnera pas.\n\nVeuillez l'installer avec : pip install google-api-python-client")
+            self.log("API Google YouTube: Non installée.")
+
+
+    def check_yt_dlp(self):
+        """Vérifie si yt-dlp est installé et met à jour son chemin."""
+        yt_dlp_location = self.downloader.find_yt_dlp_location()
+        if yt_dlp_location:
+            messagebox.showinfo("Vérification yt-dlp", f"yt-dlp est trouvé à : {yt_dlp_location}")
+        else:
+            messagebox.showwarning("Vérification yt-dlp", "yt-dlp n'est pas trouvé. La fonctionnalité de téléchargement pourrait être limitée.")
+
+
+    def install_yt_dlp(self):
+        response = messagebox.askyesno(
+            "Installer yt-dlp",
+            "yt-dlp est nécessaire pour le téléchargement. Voulez-vous télécharger yt-dlp.exe (pour Windows) ou ouvrir la page de téléchargement officielle ?"
+        )
+        if response:
+            if sys.platform == "win32":
+                try:
+                    # Téléchargement via le navigateur
+                    webbrowser.open("https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe")
+                    messagebox.showinfo("Téléchargement yt-dlp", "Le téléchargement de yt-dlp.exe devrait commencer dans votre navigateur. Placez le fichier téléchargé dans le même dossier que l'exécutable de cette application.")
+                    self.log("Ouverture du lien de téléchargement de yt-dlp.exe.")
+                except Exception as e:
+                    messagebox.showerror("Erreur", f"Impossible d'ouvrir le navigateur : {e}")
+            else: # Pour Linux/macOS, ouvrir la page GitHub
+                webbrowser.open("https://github.com/yt-dlp/yt-dlp#installation")
+                messagebox.showinfo("Installation yt-dlp", "La page d'installation de yt-dlp s'est ouverte dans votre navigateur. Suivez les instructions pour votre système.")
+                self.log("Ouverture de la page d'installation de yt-dlp.")
+        # Après l'installation supposée, vérifier à nouveau la localisation
+        self.root.after(1000, self.check_yt_dlp)
+
+
+    def check_ffmpeg_status(self):
+        """Vérifie si FFmpeg est installé et met à jour son chemin."""
+        ffmpeg_location = self.downloader.find_ffmpeg_location()
+        if ffmpeg_location:
+            messagebox.showinfo("Vérification FFmpeg", f"FFmpeg est trouvé à : {ffmpeg_location}")
+        else:
+            messagebox.showwarning("Vérification FFmpeg", "FFmpeg n'est pas trouvé. La conversion en MP3/WAV pourrait ne pas fonctionner. Veuillez l'installer.")
+
+
+    def offer_ffmpeg_install(self):
+        response = messagebox.askyesno(
+            "Installer FFmpeg",
+            "FFmpeg est nécessaire pour convertir les vidéos en MP3/WAV. Voulez-vous ouvrir la page de téléchargement officielle ?"
+        )
+        if response:
+            webbrowser.open("https://ffmpeg.org/download.html")
+            messagebox.showinfo("Téléchargement FFmpeg", "La page de téléchargement de FFmpeg s'est ouverte dans votre navigateur. Téléchargez la version adaptée à votre système et placez les exécutables (ffmpeg, ffprobe, ffplay) dans le même dossier que cette application, ou ajoutez-les à votre PATH système.")
+            self.log("Ouverture du lien de téléchargement de FFmpeg.")
+        # Après l'installation supposée, vérifier à nouveau la localisation
+        self.root.after(1000, self.check_ffmpeg_status)
+
+
+    def check_and_offer_yt_dlp_install(self):
+        """Vérifie yt-dlp au démarrage et propose l'installation si non trouvé."""
+        if not self.downloader.find_yt_dlp_location():
+            # Donner un court délai pour que l'interface soit visible avant le popup
+            self.root.after(500, lambda: messagebox.showwarning(
+                "yt-dlp Manquant",
+                "yt-dlp (le téléchargeur) n'a pas été trouvé sur votre système. "
+                "Sans lui, les fonctionnalités de téléchargement ne fonctionneront pas.\n\n"
+                "Veuillez l'installer via le menu 'Aide' -> 'Installer yt-dlp'."
+            ))
+            self.log("Avertissement: yt-dlp n'a pas été trouvé au démarrage.")
+
+    def check_and_offer_ffmpeg_install(self):
+        """Vérifie FFmpeg au démarrage et propose l'installation si non trouvé."""
+        if not self.downloader.find_ffmpeg_location():
+            # Donner un court délai pour que l'interface soit visible avant le popup
+            self.root.after(600, lambda: messagebox.showwarning(
+                "FFmpeg Manquant",
+                "FFmpeg (le convertisseur audio/vidéo) n'a pas été trouvé sur votre système. "
+                "Sans lui, la conversion en MP3, WAV, etc. ne fonctionnera pas.\n\n"
+                "Veuillez l'installer via le menu 'Aide' -> 'Installer FFmpeg'."
+            ))
+            self.log("Avertissement: FFmpeg n'a pas été trouvé au démarrage.")
 
     def set_download_folder(self):
-        """Ouvre une boîte de dialogue pour définir le dossier de téléchargement."""
         folder_selected = filedialog.askdirectory(initialdir=self.config.download_path)
         if folder_selected:
             self.config.set_download_path(folder_selected)
@@ -794,9 +802,5 @@ class MusicDLGUI:
             messagebox.showerror("Échec du Téléchargement", "Aucun élément n'a pu être téléchargé. Voir les logs pour les détails.")
 
     def run(self):
-        """Lancer l'application"""
+        """Lancer l'application."""
         self.root.mainloop()
-
-if __name__ == "__main__":
-    app = MusicDLGUI()
-    app.run()

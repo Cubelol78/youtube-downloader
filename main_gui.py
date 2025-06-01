@@ -28,9 +28,6 @@ class MusicDLGUI:
         # self.update_download_progress est appelé après setup_gui, donc self.root est créé
         self.downloader = Downloader(self.config.download_path, self.log, self.update_download_progress)
         self.memory = MemoryManager()
-        
-        # Initialize download counters
-        self.active_downloads_count = 0
 
         # Données temporaires pour les recherches
         self.search_results = []
@@ -45,15 +42,16 @@ class MusicDLGUI:
 
         # --- Gestion de la file d'attente des téléchargements ---
         self.download_queue = queue.Queue()
-        self.active_download_count = 0 # Compteur interne des téléchargements actifs - DOIT ÊTRE INITIALISÉ ICI
-        self.concurrent_limit = self.config.get_concurrent_downloads_limit() # Récupérer la limite depuis la config
-        self.download_lock = threading.Lock() # Pour synchroniser l'accès à active_download_count et la queue
+        self.active_download_count = 0  # Compteur interne des téléchargements actifs
+        self.active_downloads_count = 0  # Pour la compatibilité avec le code existant
+        self.concurrent_limit = self.config.get_concurrent_downloads_limit()  # Récupérer la limite depuis la config
+        self.download_lock = threading.Lock()  # Pour synchroniser l'accès à active_download_count et la queue
 
         # Les variables Tkinter pour les compteurs sont maintenant créées dans setup_gui()
         self.active_downloads_count_var = None
         self.completed_downloads_count_var = None
         self.failed_downloads_count_var = None
-        self.pending_downloads_count_var = None # Nouvelle variable pour les téléchargements en attente
+        self.pending_downloads_count_var = None  # Nouvelle variable pour les téléchargements en attente
 
 
         self.setup_gui() # setup_gui va créer self.root et self.download_format_var
@@ -651,6 +649,7 @@ class MusicDLGUI:
         # Afficher les nouveaux éléments de la mémoire
         memory_items = self.memory.get_memory()
         for i, item in enumerate(memory_items):
+            # L'iid est l'index direct pour faciliter la suppression
             self.memory_tree.insert("", "end", iid=str(i), values=(i + 1, item['title'], item['duration']), tags=('clickable_row',))
         self.memory_tree.tag_bind('clickable_row', '<Double-1>', self.on_memory_double_click)
 
@@ -797,7 +796,8 @@ class MusicDLGUI:
             messagebox.showwarning("Supprimer de la Mémoire", "Veuillez sélectionner au moins un élément à supprimer.")
             return
 
-        indices_to_remove = sorted([int(self.memory_tree.item(item_id)['iid']) for item_id in selected_items], reverse=True)
+        # Correction ici : item_id est déjà l'iid, pas besoin de le récupérer via .item(item_id)['iid']
+        indices_to_remove = sorted([int(item_id) for item_id in selected_items], reverse=True)
         
         success_count = 0
         for index in indices_to_remove:

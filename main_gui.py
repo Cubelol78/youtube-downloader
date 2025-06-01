@@ -25,8 +25,12 @@ class MusicDLGUI:
         self.youtube_api = YouTubeAPI(self.config.api_key)
         
         # Initialiser le downloader avec le callback de progression
+        # self.update_download_progress est appelé après setup_gui, donc self.root est créé
         self.downloader = Downloader(self.config.download_path, self.log, self.update_download_progress)
         self.memory = MemoryManager()
+        
+        # Initialize download counters
+        self.active_downloads_count = 0
 
         # Données temporaires pour les recherches
         self.search_results = []
@@ -41,9 +45,16 @@ class MusicDLGUI:
 
         # --- Gestion de la file d'attente des téléchargements ---
         self.download_queue = queue.Queue()
-        self.active_download_count = 0
+        self.active_download_count = 0 # Compteur interne des téléchargements actifs - DOIT ÊTRE INITIALISÉ ICI
         self.concurrent_limit = self.config.get_concurrent_downloads_limit() # Récupérer la limite depuis la config
         self.download_lock = threading.Lock() # Pour synchroniser l'accès à active_download_count et la queue
+
+        # Les variables Tkinter pour les compteurs sont maintenant créées dans setup_gui()
+        self.active_downloads_count_var = None
+        self.completed_downloads_count_var = None
+        self.failed_downloads_count_var = None
+        self.pending_downloads_count_var = None # Nouvelle variable pour les téléchargements en attente
+
 
         self.setup_gui() # setup_gui va créer self.root et self.download_format_var
 
@@ -59,8 +70,13 @@ class MusicDLGUI:
         self.root.geometry("1000x700")
         self.root.configure(bg='#2b2b2b') # Fond de la fenêtre principale
 
-        # Initialisation de la variable Tkinter après la création de self.root
+        # Initialisation des variables Tkinter après la création de self.root
         self.download_format_var = tk.StringVar(value="MP4") # Valeur par défaut
+        self.active_downloads_count_var = tk.IntVar(value=0)
+        self.completed_downloads_count_var = tk.IntVar(value=0)
+        self.failed_downloads_count_var = tk.IntVar(value=0) # Inclura les échecs et les annulations
+        self.pending_downloads_count_var = tk.IntVar(value=0) # Initialisation ici
+
 
         # --- Styles pour les widgets TTK ---
         style = ttk.Style()
@@ -94,6 +110,8 @@ class MusicDLGUI:
         style.configure('Heading.TLabel', background=BG_DARK, foreground=FG_PRIMARY, font=('Arial', 12, 'bold'))
         style.configure('DownloadTitle.TLabel', background=BG_MEDIUM, foreground=FG_PRIMARY, font=('Arial', 10, 'bold'))
         style.configure('DownloadStatus.TLabel', background=BG_MEDIUM, foreground=FG_SECONDARY, font=('Arial', 9))
+        # Nouveau style pour les compteurs
+        style.configure('Counter.TLabel', background=BG_DARK, foreground=FG_PRIMARY, font=('Arial', 11, 'bold'))
 
 
         # Styles pour les Boutons
@@ -348,6 +366,24 @@ class MusicDLGUI:
         # Tab pour les Téléchargements (nouveau)
         downloads_tab = ttk.Frame(self.notebook, style='Custom.TFrame')
         self.notebook.add(downloads_tab, text="Téléchargements")
+
+        # --- Compteurs de téléchargement (dans l'onglet Téléchargements) ---
+        counters_frame = ttk.Frame(downloads_tab, style='Custom.TFrame', padding=(5, 5))
+        counters_frame.pack(fill='x', pady=(0, 5), padx=5)
+
+        ttk.Label(counters_frame, text="En cours:", style='Counter.TLabel', background=BG_DARK).pack(side='left', padx=(0, 5))
+        ttk.Label(counters_frame, textvariable=self.active_downloads_count_var, style='Counter.TLabel', foreground=ACCENT_COLOR, background=BG_DARK).pack(side='left', padx=(0, 15))
+
+        ttk.Label(counters_frame, text="Terminés:", style='Counter.TLabel', background=BG_DARK).pack(side='left', padx=(0, 5))
+        ttk.Label(counters_frame, textvariable=self.completed_downloads_count_var, style='Counter.TLabel', foreground="green", background=BG_DARK).pack(side='left', padx=(0, 15))
+        
+        ttk.Label(counters_frame, text="En attente:", style='Counter.TLabel', background=BG_DARK).pack(side='left', padx=(0, 5))
+        ttk.Label(counters_frame, textvariable=self.pending_downloads_count_var, style='Counter.TLabel', foreground="orange", background=BG_DARK).pack(side='left', padx=(0, 15))
+
+
+        ttk.Label(counters_frame, text="Échoués/Annulés:", style='Counter.TLabel', background=BG_DARK).pack(side='left', padx=(0, 5))
+        ttk.Label(counters_frame, textvariable=self.failed_downloads_count_var, style='Counter.TLabel', foreground=DANGER_COLOR, background=BG_DARK).pack(side='left', padx=(0, 0))
+
 
         # Utiliser un Canvas pour rendre la zone de téléchargements scrollable
         self.downloads_canvas = tk.Canvas(downloads_tab, bg=BG_DARK, highlightthickness=0)
@@ -818,6 +854,7 @@ class MusicDLGUI:
         self.downloads_list.append(download_info) # Ajouter à la liste globale pour suivi
         self.root.after(0, lambda: self._create_download_card(download_info))
         self.log(f"Ajouté à la file d'attente: {download_info['title']} (ID: {download_info['id']})")
+        self.pending_downloads_count_var.set(self.pending_downloads_count_var.get() + 1) # Incrémenter le compteur "en attente"
         self.root.after(100, self._start_next_download_if_possible) # Tenter de démarrer immédiatement
 
     def _create_download_card(self, download_info: dict):
@@ -863,10 +900,18 @@ class MusicDLGUI:
                     # Vérifier si le téléchargement n'a pas été annulé pendant qu'il était en attente
                     if download_info['status'] == "cancelled":
                         self.log(f"Téléchargement {download_info['title']} (ID: {download_info['id']}) a été annulé avant de commencer.")
+                        self.root.after(0, lambda: self._update_download_card_widgets(self.download_widgets[download_info['id']], download_info))
+                        # Le compteur failed_downloads_count_var est déjà mis à jour dans cancel_download si annulé depuis "En attente"
+                        # Ou il sera mis à jour par update_download_progress si le statut final est "cancelled"
+                        # Décrémenter le compteur "en attente" car il ne l'est plus
+                        self.pending_downloads_count_var.set(self.pending_downloads_count_var.get() - 1)
                         self._start_next_download_if_possible() # Tenter le suivant
                         return
 
                     self.active_download_count += 1
+                    self.active_downloads_count_var.set(self.active_download_count) # Mettre à jour le compteur Tkinter
+                    self.pending_downloads_count_var.set(self.pending_downloads_count_var.get() - 1) # Décrémenter le compteur "en attente"
+
                     self.log(f"Démarrage du téléchargement: {download_info['title']} (Actifs: {self.active_download_count}/{self.concurrent_limit})")
                     # Mettre à jour le statut de la carte immédiatement
                     self.root.after(0, lambda: self._update_download_card_widgets(
@@ -893,21 +938,30 @@ class MusicDLGUI:
         # Trouver l'info de téléchargement dans la liste
         dl_info = next((dl for dl in self.downloads_list if dl['id'] == download_id), None)
         if dl_info:
+            # Sauvegarder l'ancien statut pour la logique de décrémentation
+            old_status = dl_info['status'] 
             dl_info['status'] = status
             dl_info['progress'] = progress
             dl_info['message'] = message # Stocker le message de progression détaillé
+
+            # Mettre à jour les compteurs si le statut final est atteint
+            if status in ["completed", "failed", "cancelled"] and old_status not in ["completed", "failed", "cancelled"]:
+                with self.download_lock:
+                    self.active_download_count -= 1
+                    self.active_downloads_count_var.set(self.active_downloads_count) # Décrémenter le compteur Tkinter actif
+                    self.log(f"Téléchargement {download_id} terminé/annulé/échoué. Actifs restants: {self.active_download_count}")
+                
+                if status == "completed":
+                    self.completed_downloads_count_var.set(self.completed_downloads_count_var.get() + 1)
+                elif status in ["failed", "cancelled"]: # Regrouper les échecs et annulations
+                    self.failed_downloads_count_var.set(self.failed_downloads_count_var.get() + 1)
+
+                self.root.after(100, self._start_next_download_if_possible) # Tenter de démarrer le suivant
 
         # Mettre à jour les widgets correspondants
         if download_id in self.download_widgets:
             widgets = self.download_widgets[download_id]
             self.root.after(0, lambda: self._update_download_card_widgets(widgets, dl_info))
-
-            # Si le téléchargement est terminé (succès, échec, annulation), libérer un "slot"
-            if status in ["completed", "failed", "cancelled"]:
-                with self.download_lock:
-                    self.active_download_count -= 1
-                    self.log(f"Téléchargement {download_id} terminé/annulé/échoué. Actifs restants: {self.active_download_count}")
-                self.root.after(100, self._start_next_download_if_possible) # Tenter de démarrer le suivant
 
     def _update_download_card_widgets(self, widgets: dict, dl_info: dict):
         """Met à jour les widgets d'une carte de téléchargement spécifique."""
@@ -948,7 +1002,7 @@ class MusicDLGUI:
         elif dl_info['status'] == "cancelled":
             widgets['status_label'].config(foreground="orange")
         elif dl_info['status'] == "En attente":
-            widgets['status_label'].config(foreground=self.FG_SECONDARY) # Couleur par défaut ou gris
+            widgets['status_label'].config(foreground=self.root.tk.eval('ttk::style lookup DownloadStatus.TLabel -foreground')) # Couleur par défaut ou gris
         else:
             widgets['status_label'].config(foreground=self.root.tk.eval('ttk::style lookup DownloadStatus.TLabel -foreground')) # Couleur par défaut
 
@@ -972,6 +1026,9 @@ class MusicDLGUI:
                     dl_to_cancel['message'] = "Annulé (en attente)"
                     self.root.after(0, lambda: self._update_download_card_widgets(self.download_widgets[download_id], dl_to_cancel))
                     self.log(f"Téléchargement en attente {dl_to_cancel['title']} annulé.")
+                    # Mettre à jour le compteur d'échecs/annulations et décrémenter "en attente"
+                    self.failed_downloads_count_var.set(self.failed_downloads_count_var.get() + 1)
+                    self.pending_downloads_count_var.set(self.pending_downloads_count_var.get() - 1)
                     # Tenter de démarrer le prochain téléchargement si un slot se libère (bien que ce ne soit pas un slot "actif")
                     self.root.after(100, self._start_next_download_if_possible)
             else:

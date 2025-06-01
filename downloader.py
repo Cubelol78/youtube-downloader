@@ -5,6 +5,7 @@ import subprocess
 import threading
 from typing import Callable, Optional, Dict
 import re # Importation pour les expressions régulières
+import queue # Pour la communication entre les threads de lecture et le thread principal de téléchargement
 
 class Downloader:
     def __init__(self, download_path: str, log_callback: Optional[Callable] = None, progress_callback: Optional[Callable] = None):
@@ -108,9 +109,16 @@ class Downloader:
         self.ffmpeg_path = None
         return ""
 
+    def _read_stream(self, stream, queue):
+        """Lit un flux de sortie et place chaque ligne dans une queue."""
+        for line in iter(stream.readline, ''):
+            queue.put(line)
+        stream.close()
+
     def _download_single_item(self, url: str, selected_format: str, download_id: str) -> bool:
         """
-        Télécharger un seul élément (vidéo ou playlist).
+        Télécharge un seul élément (vidéo ou playlist).
+        La progression est envoyée via progress_callback.
         """
         try:
             if not self.yt_dlp_path:
@@ -125,13 +133,12 @@ class Downloader:
                     self.progress_callback(download_id, "failed", 0, "Dossier de téléchargement invalide")
                 return False
 
-            # Déterminer les arguments yt-dlp
             yt_dlp_args = [
                 self.yt_dlp_path,
                 "-P", self.download_path,
                 "--ffmpeg-location", self.ffmpeg_path if self.ffmpeg_path else "ffmpeg",
-                "--progress", # Activer la sortie de progression
-                "--newline",  # Assurer que chaque ligne de progression est sur une nouvelle ligne
+                "--progress",
+                "--newline",
                 url
             ]
 
@@ -156,7 +163,6 @@ class Downloader:
             elif selected_format == "avi":
                 yt_dlp_args.extend(["-f", "bestvideo[ext=avi]+bestaudio[ext=avi]/best[ext=avi]/best"])
 
-            # Options pour masquer la fenêtre de console sur Windows
             creationflags = 0
             if sys.platform == "win32":
                 creationflags = subprocess.CREATE_NO_WINDOW
@@ -175,62 +181,91 @@ class Downloader:
             )
             self.active_processes[download_id] = process
 
-            # Lire la sortie en temps réel pour la progression
-            while True:
-                output = process.stdout.readline()
-                if output == '' and process.poll() is not None:
-                    break
-                if output:
-                    output_stripped = output.strip()
-                    self.log(f"[RAW YT-DLP] {output_stripped}") # Log la sortie brute avec un préfixe distinct
+            # Queues pour les sorties stdout et stderr
+            stdout_queue = queue.Queue()
+            stderr_queue = queue.Queue()
 
-                    # Tenter de parser la progression
-                    progress_percent = -1.0 # Valeur par défaut pour indiquer pas de progression trouvée
+            # Threads pour lire les sorties
+            stdout_thread = threading.Thread(target=self._read_stream, args=(process.stdout, stdout_queue))
+            stderr_thread = threading.Thread(target=self._read_stream, args=(process.stderr, stderr_queue))
+            stdout_thread.daemon = True # Permet au programme de se fermer même si les threads sont actifs
+            stderr_thread.daemon = True
+            stdout_thread.start()
+            stderr_thread.start()
+
+            total_playlist_items = 1 # Par default, pour une seule vidéo
+            current_playlist_item_index = 0
+
+            while process.poll() is None or not stdout_queue.empty() or not stderr_queue.empty():
+                try:
+                    output = stdout_queue.get(timeout=0.1) # Lire avec un timeout pour ne pas bloquer indéfiniment
+                    output_stripped = output.strip()
+                    self.log(f"[RAW YT-DLP] {output_stripped}")
+
+                    progress_percent = -1.0
                     current_status_message = output_stripped
 
-                    if "[download]" in output_stripped:
-                        percent_match = re.search(r'(\d+\.?\d*)%', output_stripped) # Capture des entiers ou décimaux
-                        if percent_match:
-                            try:
-                                progress_percent = float(percent_match.group(1))
-                                current_status_message = output_stripped # Utiliser la ligne complète comme message
-                            except ValueError:
-                                pass # Ignorer les erreurs de parsing, garder le message brut
-                        elif "ETA" not in output_stripped: # Si pas de pourcentage et pas d'ETA, c'est peut-être une étape intermédiaire
-                            if "Downloading item" in output_stripped:
-                                current_status_message = "Téléchargement d'élément..."
-                            elif "has already been downloaded" in output_stripped:
-                                current_status_message = "Déjà téléchargé"
-                                progress_percent = 100.0 # Marquer comme 100% si déjà téléchargé
+                    playlist_item_match = re.search(r'Downloading item (\d+) of (\d+)', output_stripped)
+                    if playlist_item_match:
+                        current_playlist_item_index = int(playlist_item_match.group(1))
+                        total_playlist_items = int(playlist_item_match.group(2))
+                        current_status_message = f"Téléchargement de l'élément {current_playlist_item_index}/{total_playlist_items}"
+                        base_progress = ((current_playlist_item_index - 1) / total_playlist_items) * 100
+                        progress_percent = base_progress
+
+                    percent_match = re.search(r'(\d+\.?\d*)%', output_stripped)
+                    if percent_match:
+                        try:
+                            item_progress = float(percent_match.group(1))
+                            if total_playlist_items > 1:
+                                progress_percent = ((current_playlist_item_index - 1) / total_playlist_items) * 100 + (item_progress / total_playlist_items)
                             else:
-                                current_status_message = output_stripped # Message brut si non reconnu
+                                progress_percent = item_progress
+                            current_status_message = output_stripped
+                        except ValueError:
+                            pass
+
                     elif "[ExtractAudio]" in output_stripped:
                         current_status_message = "Extraction audio..."
-                        progress_percent = 90.0 # Estimer la progression pour l'extraction
+                        if total_playlist_items > 1:
+                            progress_percent = ((current_playlist_item_index - 1) / total_playlist_items) * 100 + (90.0 / total_playlist_items)
+                        else:
+                            progress_percent = 90.0
                     elif "[ffmpeg]" in output_stripped:
                         current_status_message = "Conversion/Multiplexage..."
-                        progress_percent = 95.0 # Estimer la progression pour ffmpeg
+                        if total_playlist_items > 1:
+                            progress_percent = ((current_playlist_item_index - 1) / total_playlist_items) * 100 + (95.0 / total_playlist_items)
+                        else:
+                            progress_percent = 95.0
                     
-                    # Si une progression a été trouvée ou estimée, mettre à jour le callback
                     if self.progress_callback:
                         status_to_report = "active"
                         if progress_percent >= 100.0:
-                            status_to_report = "completed" # Marquer comme terminé si 100%
-                        elif progress_percent == -1.0: # Si pas de pourcentage détecté, mais toujours actif
+                            status_to_report = "completed"
+                        elif progress_percent == -1.0:
                             status_to_report = "En cours..."
-                            progress_percent = 0 # Garder 0% si pas de progression spécifique
+                            progress_percent = 0
 
                         self.progress_callback(download_id, status_to_report, max(0.0, progress_percent), current_status_message)
 
-            stderr_output = process.stderr.read()
-            if stderr_output:
-                for line in stderr_output.splitlines():
-                    if line.strip():
-                        self.log(f"yt-dlp Erreur: {line}")
+                except queue.Empty:
+                    pass # Pas de nouvelle ligne de stdout pour l'instant
+
+                try:
+                    error_line = stderr_queue.get(timeout=0.1)
+                    if error_line.strip():
+                        self.log(f"yt-dlp Erreur: {error_line.strip()}")
+                except queue.Empty:
+                    pass # Pas de nouvelle ligne de stderr pour l'instant
+
+            # Assurez-vous de vider les queues après la fin du processus
+            for output in list(stdout_queue.queue):
+                if output.strip(): self.log(f"[RAW YT-DLP] {output.strip()}")
+            for error_line in list(stderr_queue.queue):
+                if error_line.strip(): self.log(f"yt-dlp Erreur: {error_line.strip()}")
 
             process.wait() # Attendre la fin du processus
             
-            # Supprimer le processus de la liste des actifs après qu'il soit terminé
             if download_id in self.active_processes:
                 del self.active_processes[download_id] 
 
@@ -261,7 +296,7 @@ class Downloader:
     # Je la laisse ici au cas où elle serait appelée dans d'autres contextes, mais elle n'est plus le point d'entrée pour les téléchargements multiples.
     def download_items_in_bulk(self, urls: list[str], selected_format: str, callback: Callable[[int, int], None], download_ids: list[str]):
         """
-        Télécharger plusieurs éléments de manière asynchrone.
+        Télécharge plusieurs éléments de manière asynchrone.
         Cette méthode est maintenant dépréciée pour l'usage direct par MusicDLGUI,
         la gestion des téléchargements multiples se fait via la file d'attente.
         """

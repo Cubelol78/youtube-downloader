@@ -9,6 +9,7 @@ from tkinter import ttk, messagebox, scrolledtext, filedialog
 import webbrowser # Pour ouvrir le lien de téléchargement
 import uuid # Pour générer des IDs uniques pour les téléchargements
 import queue # Pour gérer la file d'attente des téléchargements
+import json # Pour parser la sortie JSON de yt-dlp
 
 from config_manager import ConfigManager
 from youtube_api import YouTubeAPI, GOOGLE_API_AVAILABLE
@@ -437,49 +438,100 @@ class MusicDLGUI:
                 return True
         return False
 
-    def _extract_video_info_from_url(self, url: str) -> dict:
-        """Extrait les informations de base depuis une URL YouTube/YouTube Music."""
+    def _extract_video_info_from_url(self, url: str) -> list:
+        """
+        Extrait les informations (titre, URL, durée) depuis une URL YouTube/YouTube Music.
+        Gère à la fois les vidéos individuelles et les playlists.
+        Retourne une liste de dictionnaires, chaque dict étant {'title': ..., 'url': ..., 'duration': ...}.
+        """
         import re
+        
+        # Vérifier si yt-dlp est disponible
+        if not self.downloader.yt_dlp_path:
+            self.log("Erreur: yt-dlp n'est pas trouvé. Impossible d'extraire les informations.")
+            return []
+
+        is_playlist = self._is_playlist_url(url)
+        
         try:
             creationflags = 0
             if sys.platform == "win32":
                 creationflags = subprocess.CREATE_NO_WINDOW
 
+            cmd = [self.downloader.yt_dlp_path, "--dump-json"]
+            if is_playlist:
+                cmd.append("--flat-playlist") # Ne télécharge pas, juste extrait la liste des vidéos
+            cmd.append(url)
+
+            self.log(f"Extraction des informations pour: {url} (playlist: {is_playlist})...")
             process = subprocess.run(
-                [self.downloader.yt_dlp_path, "--get-title", "--get-duration", "--restrict-filenames", url],
+                cmd,
                 check=True,
                 capture_output=True,
                 text=True,
                 creationflags=creationflags
             )
+            
             output_lines = process.stdout.strip().split('\n')
-            if len(output_lines) >= 2:
-                title = output_lines[0].strip()
-                duration_str = output_lines[1].strip()
+            extracted_items = []
 
+            for line in output_lines:
                 try:
-                    total_seconds = int(duration_str)
-                    hours = total_seconds // 3600
-                    minutes = (total_seconds % 3600) // 60
-                    seconds = total_seconds % 60
-                    duration = f"{hours:02}:{minutes:02}:{seconds:02}"
-                except ValueError:
-                    duration = "00:00:00"
+                    data = json.loads(line)
+                    title = data.get('title', 'Titre inconnu')
+                    video_url = data.get('webpage_url', data.get('url', url)) # Utilise webpage_url ou url
+                    
+                    # Assurez-vous que duration_seconds est un entier, même si yt-dlp renvoie None
+                    duration_seconds = data.get('duration')
+                    if duration_seconds is None:
+                        duration_seconds = 0 # Valeur par défaut si None est retourné
 
-                self.log(f"Informations extraites: Titre='{title}', Durée='{duration}'")
-                return {"title": title, "url": url, "duration": duration}
-            else:
-                self.log(f"Impossible d'extraire les informations pour l'URL: {url}. Sortie: {process.stdout.strip()}")
-                return {"title": "Titre inconnu", "url": url, "duration": "00:00:00"}
+                    # Convertir la durée en format HH:MM:SS
+                    hours = duration_seconds // 3600
+                    minutes = (duration_seconds % 3600) // 60
+                    seconds = duration_seconds % 60
+                    duration_formatted = f"{hours:02}:{minutes:02}:{seconds:02}"
+                    
+                    extracted_items.append({
+                        "title": title,
+                        "url": video_url,
+                        "duration": duration_formatted
+                    })
+                except json.JSONDecodeError:
+                    self.log(f"Avertissement: Ligne non-JSON reçue de yt-dlp: {line[:100]}...") # Log partiel
+                    continue
+            
+            if not extracted_items:
+                self.log(f"Aucune information extraite pour l'URL: {url}. Sortie brute: {process.stdout.strip()}")
+                return []
+            
+            self.log(f"Informations extraites pour {len(extracted_items)} élément(s) depuis {url}.")
+            return extracted_items
+
         except FileNotFoundError:
             self.log("Erreur: yt-dlp n'est pas trouvé. Impossible d'extraire les informations.")
-            return {"title": "Titre inconnu (yt-dlp non trouvé)", "url": url, "duration": "00:00:00"}
+            return []
         except subprocess.CalledProcessError as e:
             self.log(f"Erreur lors de l'exécution de yt-dlp pour extraire les infos: {e.stderr}")
-            return {"title": "Titre inconnu (erreur yt-dlp)", "url": url, "duration": "00:00:00"}
+            self.log(f"Commande exécutée: {' '.join(cmd)}")
+            return []
         except Exception as e:
             self.log(f"Erreur inattendue lors de l'extraction des informations: {e}")
-            return {"title": "Titre inconnu (erreur)", "url": url, "duration": "00:00:00"}
+            return []
+
+    def _is_playlist_url(self, url: str) -> bool:
+        """Vérifie si l'URL est une URL de playlist YouTube."""
+        playlist_patterns = [
+            r'https?://(www\.)?youtube\.com/playlist\?list=',
+            r'https?://(www\.)?youtube\.com/watch\?.*&list=',
+            r'https?://music\.youtube\.com/playlist\?list=',
+        ]
+        import re
+        for pattern in playlist_patterns:
+            if re.match(pattern, url):
+                return True
+        return False
+
 
     def add_url_to_memory(self):
         url = self.url_entry.get().strip()
@@ -496,16 +548,25 @@ class MusicDLGUI:
 
     def _add_url_to_memory_task(self, url: str):
         try:
-            info = self._extract_video_info_from_url(url)
-            if info and info["title"] != "Titre inconnu" and info["duration"] != "00:00:00":
+            # Cette méthode retourne maintenant une liste
+            extracted_items = self._extract_video_info_from_url(url)
+            
+            if not extracted_items:
+                self.log(f"Impossible d'obtenir des informations valides pour l'URL: {url}. Non ajouté.")
+                self.root.after(0, lambda: messagebox.showerror("Erreur d'extraction", "Impossible d'extraire les informations de la vidéo/playlist pour l'URL fournie. Veuillez vérifier l'URL ou votre connexion Internet."))
+                return
+
+            added_count = 0
+            for info in extracted_items:
                 if self.memory.add_item(info["title"], info["url"], info["duration"]):
                     self.log(f"Ajouté à la mémoire: {info['title']}")
-                    self.root.after(0, self.update_memory_display)
+                    added_count += 1
                 else:
-                    self.log(f"Échec de l'ajout à la mémoire: {info['title']}")
-            else:
-                self.log(f"Impossible d'obtenir des informations valides pour l'URL: {url}. Non ajouté.")
-                self.root.after(0, lambda: messagebox.showerror("Erreur d'extraction", "Impossible d'extraire les informations de la vidéo pour l'URL fournie. Veuillez vérifier l'URL ou votre connexion Internet."))
+                    self.log(f"Échec de l'ajout à la mémoire (peut-être déjà présent): {info['title']}")
+            
+            self.root.after(0, self.update_memory_display)
+            self.root.after(0, lambda: messagebox.showinfo("Ajouter à la Mémoire", f"{added_count} élément(s) ajouté(s) à la mémoire."))
+
         except Exception as e:
             self.log(f"Erreur lors de l'ajout de l'URL à la mémoire: {e}")
             self.root.after(0, lambda: messagebox.showerror("Erreur", f"Une erreur est survenue: {e}"))
@@ -606,25 +667,31 @@ class MusicDLGUI:
 
         self.log(f"Préparation du téléchargement de l'URL: {url} au format {selected_format}...")
         
-        download_id = str(uuid.uuid4()) # Générer un ID unique pour ce téléchargement
-        initial_title = url
-        try:
-            info = self._extract_video_info_from_url(url)
-            if info and info["title"] != "Titre inconnu":
-                initial_title = info["title"]
-        except Exception:
-            pass # Ignorer l'erreur d'extraction ici, le téléchargement continuera
-
-        # Ajouter le téléchargement à la file d'attente
-        self.add_download_to_queue({
-            "id": download_id,
-            "title": initial_title,
-            "url": url,
-            "format": selected_format,
-            "status": "En attente",
-            "progress": 0
-        })
+        # Lancer l'extraction d'informations en arrière-plan
+        threading.Thread(target=self._queue_download_from_url_task, args=(url, selected_format)).start()
         self.notebook.select(1) # Sélectionner l'onglet "Téléchargements"
+
+    def _queue_download_from_url_task(self, url: str, selected_format: str):
+        """Tâche asynchrone pour extraire les infos et ajouter à la file d'attente."""
+        try:
+            extracted_items = self._extract_video_info_from_url(url)
+            if not extracted_items:
+                self.root.after(0, lambda: messagebox.showerror("Erreur d'extraction", "Impossible d'extraire les informations de la vidéo/playlist pour l'URL fournie. Le téléchargement ne peut pas démarrer."))
+                return
+
+            for item_info in extracted_items:
+                download_id = str(uuid.uuid4())
+                self.add_download_to_queue({
+                    "id": download_id,
+                    "title": item_info['title'],
+                    "url": item_info['url'],
+                    "format": selected_format,
+                    "status": "En attente",
+                    "progress": 0
+                })
+        except Exception as e:
+            self.log(f"Erreur lors de la mise en file d'attente de l'URL: {e}")
+            self.root.after(0, lambda: messagebox.showerror("Erreur", f"Une erreur est survenue lors de la préparation du téléchargement: {e}"))
 
 
     def add_selected_to_memory(self):
@@ -655,8 +722,8 @@ class MusicDLGUI:
 
 
     def download_selected_from_results(self):
-        selected_items = self.results_tree.selection()
-        if not selected_items:
+        selected_items_ids = self.results_tree.selection()
+        if not selected_items_ids:
             messagebox.showwarning("Téléchargement", "Veuillez sélectionner au moins un élément dans les résultats de recherche.")
             return
 
@@ -670,8 +737,8 @@ class MusicDLGUI:
             messagebox.showwarning("FFmpeg introuvable", "FFmpeg n'est pas configuré. Impossible de convertir en MP3/WAV/FLAC/M4A/OPUS. Veuillez l'installer via le menu Aide.")
             return
 
-        self.log(f"Préparation du téléchargement de {len(selected_items)} éléments sélectionnés...")
-        for item_id in selected_items:
+        self.log(f"Préparation du téléchargement de {len(selected_items_ids)} éléments sélectionnés...")
+        for item_id in selected_items_ids:
             item_values = self.results_tree.item(item_id, 'values')
             selected_result_index = int(item_values[0]) - 1
             if 0 <= selected_result_index < len(self.search_results):
@@ -881,7 +948,7 @@ class MusicDLGUI:
         elif dl_info['status'] == "cancelled":
             widgets['status_label'].config(foreground="orange")
         elif dl_info['status'] == "En attente":
-            widgets['status_label'].config(foreground='#cccccc') # Couleur par défaut ou gris
+            widgets['status_label'].config(foreground=self.FG_SECONDARY) # Couleur par défaut ou gris
         else:
             widgets['status_label'].config(foreground=self.root.tk.eval('ttk::style lookup DownloadStatus.TLabel -foreground')) # Couleur par défaut
 

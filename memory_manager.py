@@ -3,7 +3,7 @@ import os
 from typing import List, Dict
 
 class MemoryManager:
-    def __init__(self, memory_path: str = "C:/MesScripts/links.txt"):
+    def __init__(self, memory_path: str = "C:/YoutubeDownloader/links.txt"):
         self.memory_path = memory_path
         self.memory_data = []
         self.load_memory()

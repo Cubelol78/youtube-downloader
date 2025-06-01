@@ -2,7 +2,7 @@ import os
 import json
 
 class ConfigManager:
-    def __init__(self, config_path="C:/MesScripts/config.json"):
+    def __init__(self, config_path="C:/YoutubeDownloader/config.json"):
         self.config_path = config_path
         self.api_key = ''
         self.download_path = os.getcwd()

@@ -7,15 +7,14 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext, filedialog
 import webbrowser # Pour ouvrir le lien de téléchargement
+import uuid # Pour générer des IDs uniques pour les téléchargements
+import queue # Pour gérer la file d'attente des téléchargements
 
 from config_manager import ConfigManager
 from youtube_api import YouTubeAPI, GOOGLE_API_AVAILABLE
 from downloader import Downloader
 from memory_manager import MemoryManager
 from dialogs import APIKeyDialog
-# Pas besoin d'importer styles et gui_elements ici si vous les avez déjà en fichiers séparés et importez comme ci-dessous
-# from styles import apply_styles # Pas besoin d'importer styles ici car c'est déjà appliqué dans le fichier styles.py
-# import gui_elements # Pas besoin d'importer gui_elements ici car les fonctions sont appelées directement
 
 class MusicDLGUI:
     def __init__(self):
@@ -23,16 +22,27 @@ class MusicDLGUI:
         self.config = ConfigManager()
         self.log_display = None
         self.youtube_api = YouTubeAPI(self.config.api_key)
-        # Le downloader a besoin d'une fonction de log, qu'il va trouver via self.log après setup_gui
-        # On passe None initialement, et on s'assurera que self.log_display est prêt avant l'appel à downloader.log
-        self.downloader = Downloader(self.config.download_path, self.log)
+        
+        # Initialiser le downloader avec le callback de progression
+        self.downloader = Downloader(self.config.download_path, self.log, self.update_download_progress)
         self.memory = MemoryManager()
 
         # Données temporaires pour les recherches
         self.search_results = []
 
-        # NOTE IMPORTANTE : self.download_format_var sera initialisé dans setup_gui, après tk.Tk()
+        # Liste pour suivre les téléchargements actifs, terminés et échoués
+        # Chaque élément sera un dict: {'id': uuid, 'title': str, 'status': str, 'progress': float, 'url': str, 'format': str}
+        self.downloads_list = []
+        # Dictionnaire pour mapper download_id aux widgets Tkinter de la carte de téléchargement
+        self.download_widgets = {} # {'download_id': {'card_frame': ..., 'title_label': ..., 'status_label': ..., 'progressbar': ..., 'cancel_button': ...}}
+
         self.download_format_var = None # Initialiser à None ici
+
+        # --- Gestion de la file d'attente des téléchargements ---
+        self.download_queue = queue.Queue()
+        self.active_download_count = 0
+        self.concurrent_limit = self.config.get_concurrent_downloads_limit() # Récupérer la limite depuis la config
+        self.download_lock = threading.Lock() # Pour synchroniser l'accès à active_download_count et la queue
 
         self.setup_gui() # setup_gui va créer self.root et self.download_format_var
 
@@ -73,10 +83,16 @@ class MusicDLGUI:
                         relief='flat', borderwidth=2)
         style.configure('Custom.TLabelframe.Label', background=BG_MEDIUM, foreground=FG_PRIMARY,
                         font=('Arial', 11, 'bold'))
+        
+        # Style pour les cadres de téléchargement individuels
+        style.configure('DownloadCard.TFrame', background=BG_MEDIUM, relief='solid', borderwidth=1,
+                        padding=(10, 10))
 
         # Styles pour les Labels
         style.configure('Custom.TLabel', background=BG_DARK, foreground=FG_PRIMARY, font=('Arial', 10))
         style.configure('Heading.TLabel', background=BG_DARK, foreground=FG_PRIMARY, font=('Arial', 12, 'bold'))
+        style.configure('DownloadTitle.TLabel', background=BG_MEDIUM, foreground=FG_PRIMARY, font=('Arial', 10, 'bold'))
+        style.configure('DownloadStatus.TLabel', background=BG_MEDIUM, foreground=FG_SECONDARY, font=('Arial', 9))
 
 
         # Styles pour les Boutons
@@ -117,7 +133,7 @@ class MusicDLGUI:
                   selectforeground=[('readonly', 'white')],
                   background=[('active', BUTTON_ACTIVE_BG)]) # Fond de la liste déroulante au survol
 
-        # Styles pour les Treeview
+        # Styles pour les Treeview (pour Mémoire et Résultats)
         style.configure('Treeview',
                         background=BG_LIGHT, foreground=FG_PRIMARY,
                         fieldbackground=BG_LIGHT, borderwidth=0, relief='flat',
@@ -139,6 +155,23 @@ class MusicDLGUI:
                         relief='flat', borderwidth=0)
         style.map('Vertical.TScrollbar',
                   background=[('active', ACCENT_COLOR)])
+        
+        # Style pour la barre de progression (nouveau)
+        style.configure("TProgressbar", thickness=15, troughcolor=BG_DARK,
+                        background=ACCENT_COLOR, borderwidth=0, relief='flat')
+        style.map("TProgressbar",
+                  background=[('active', ACCENT_COLOR)])
+
+        # --- NOUVEAUX STYLES POUR LES ONGLET DU NOTEBOOK ---
+        style.configure('TNotebook', background=BG_DARK, borderwidth=0)
+        style.configure('TNotebook.Tab',
+                        background=BG_MEDIUM, foreground=FG_PRIMARY,
+                        font=('Arial', 10, 'bold'), padding=[10, 5])
+        style.map('TNotebook.Tab',
+                  background=[('selected', BG_DARK), ('active', BUTTON_ACTIVE_BG)],
+                  foreground=[('selected', ACCENT_COLOR), ('active', FG_PRIMARY)])
+        style.configure('TNotebook.Tab', focuscolor=BG_DARK) # Supprime le contour en pointillé au focus
+
 
         # --- Layout principal ---
         main_pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, bg=BG_DARK, bd=0, relief='flat')
@@ -148,7 +181,7 @@ class MusicDLGUI:
         left_frame = ttk.Frame(main_pane, style='Custom.TFrame')
         main_pane.add(left_frame, width=450, minsize=350) # minsize pour redimensionnement
 
-        # Panneau droit (Téléchargement et Logs)
+        # Panneau droit (Mémoire, Téléchargements et Logs)
         right_frame = ttk.Frame(main_pane, style='Custom.TFrame')
         main_pane.add(right_frame, minsize=350)
 
@@ -188,7 +221,7 @@ class MusicDLGUI:
         ttk.Label(format_selector_url_frame, text="Format:", style='Custom.TLabel').pack(side='left', padx=(0, 5))
         self.format_combobox_url = ttk.Combobox(format_selector_url_frame,
                                                textvariable=self.download_format_var,
-                                               values=["MP3", "MP4", "WAV", "FLAC", "WEBM", "MKV", "M4A", "OPUS", "MOV", "AVI"], # OGG et AAC retirés
+                                               values=["MP3", "MP4", "WAV", "FLAC", "WEBM", "MKV", "M4A", "OPUS", "MOV", "AVI"],
                                                state="readonly", width=5, style='TCombobox')
         self.format_combobox_url.pack(side='left')
         self.format_combobox_url.set("MP4") # Valeur par défaut
@@ -236,7 +269,7 @@ class MusicDLGUI:
         ttk.Label(format_selector_results_frame, text="Format:", style='Custom.TLabel').pack(side='left', padx=(0, 5))
         self.format_combobox_results = ttk.Combobox(format_selector_results_frame,
                                                  textvariable=self.download_format_var,
-                                                 values=["MP3", "MP4", "WAV", "FLAC", "WEBM", "MKV", "M4A", "OPUS", "MOV", "AVI"], # OGG et AAC retirés
+                                                 values=["MP3", "MP4", "WAV", "FLAC", "WEBM", "MKV", "M4A", "OPUS", "MOV", "AVI"],
                                                  state="readonly", width=5, style='TCombobox')
         self.format_combobox_results.pack(side='left')
         self.format_combobox_results.set("MP4") # Valeur par défaut
@@ -277,7 +310,7 @@ class MusicDLGUI:
         ttk.Label(format_selector_memory_frame, text="Format:", style='Custom.TLabel').pack(side='left', padx=(0, 5))
         self.format_combobox_memory = ttk.Combobox(format_selector_memory_frame,
                                                  textvariable=self.download_format_var, # Partage la même variable
-                                                 values=["MP3", "MP4", "WAV", "FLAC", "WEBM", "MKV", "M4A", "OPUS", "MOV", "AVI"], # OGG et AAC retirés
+                                                 values=["MP3", "MP4", "WAV", "FLAC", "WEBM", "MKV", "M4A", "OPUS", "MOV", "AVI"],
                                                  state="readonly", width=5, style='TCombobox')
         self.format_combobox_memory.pack(side='left')
         self.format_combobox_memory.set("MP4") # Valeur par défaut
@@ -294,15 +327,45 @@ class MusicDLGUI:
                                       command=self.clear_all_memory, style='Danger.TButton')
         clear_memory_btn.pack(side='right', padx=(5, 5)) # Ajuster le padx
 
-        # Section Logs
-        log_frame = ttk.LabelFrame(right_frame, text="Logs", style='Custom.TLabelframe',
+        # --- Notebook pour Logs et Téléchargements ---
+        self.notebook = ttk.Notebook(right_frame, style='TNotebook') # Applique le style TNotebook ici
+        self.notebook.pack(fill='both', expand=True, pady=10, padx=10)
+
+        # Tab pour les Logs
+        log_tab = ttk.Frame(self.notebook, style='Custom.TFrame')
+        self.notebook.add(log_tab, text="Logs")
+
+        log_frame = ttk.LabelFrame(log_tab, text="Logs", style='Custom.TLabelframe',
                                    padding=(15, 10, 15, 15))
-        log_frame.pack(fill='both', expand=True, pady=10, padx=10)
+        log_frame.pack(fill='both', expand=True, padx=5, pady=5)
 
         self.log_display = scrolledtext.ScrolledText(log_frame, wrap='word', height=10,
                                                      bg=BG_LIGHT, fg=FG_PRIMARY, font=('Consolas', 9),
-                                                     state='disabled', relief='flat', borderwidth=0) # Désactiver l'édition
-        self.log_display.pack(fill='both', expand=True, padx=5, pady=5) # Ajout de padding
+                                                     state='disabled', relief='flat', borderwidth=0)
+        self.log_display.pack(fill='both', expand=True, padx=5, pady=5)
+
+        # Tab pour les Téléchargements (nouveau)
+        downloads_tab = ttk.Frame(self.notebook, style='Custom.TFrame')
+        self.notebook.add(downloads_tab, text="Téléchargements")
+
+        # Utiliser un Canvas pour rendre la zone de téléchargements scrollable
+        self.downloads_canvas = tk.Canvas(downloads_tab, bg=BG_DARK, highlightthickness=0)
+        self.downloads_canvas.pack(side='left', fill='both', expand=True)
+
+        self.downloads_scrollbar = ttk.Scrollbar(downloads_tab, orient="vertical", command=self.downloads_canvas.yview, style='Vertical.TScrollbar')
+        self.downloads_scrollbar.pack(side='right', fill='y')
+
+        self.downloads_canvas.configure(yscrollcommand=self.downloads_scrollbar.set)
+        
+        # Frame à l'intérieur du Canvas pour contenir les cartes de téléchargement
+        # Le tag "downloads_frame_window" est utilisé pour identifier cette fenêtre dans le canvas
+        self.downloads_container_frame = ttk.Frame(self.downloads_canvas, style='Custom.TFrame')
+        self.downloads_container_frame_id = self.downloads_canvas.create_window((0, 0), window=self.downloads_container_frame, anchor='nw', tags="downloads_frame_window")
+
+        # Bind pour redimensionner le frame interne lorsque le canvas est redimensionné
+        self.downloads_container_frame.bind("<Configure>", lambda e: self.downloads_canvas.configure(scrollregion=self.downloads_canvas.bbox("all")))
+        self.downloads_canvas.bind('<Configure>', self._on_canvas_resize)
+
 
         # --- Menu principal ---
         menubar = tk.Menu(self.root, bg=BG_MEDIUM, fg=FG_PRIMARY, relief='flat', borderwidth=0)
@@ -319,6 +382,7 @@ class MusicDLGUI:
                              activebackground=ACCENT_COLOR, activeforeground='white')
         menubar.add_cascade(label="Configuration", menu=config_menu)
         config_menu.add_command(label="Configurer la clé API YouTube", command=self.configure_api_key)
+        config_menu.add_command(label="Définir la limite de téléchargements", command=self.set_concurrent_downloads_limit_dialog) # Nouvelle option
 
         help_menu = tk.Menu(menubar, tearoff=0, bg=BG_MEDIUM, fg=FG_PRIMARY,
                              activebackground=ACCENT_COLOR, activeforeground='white')
@@ -331,6 +395,11 @@ class MusicDLGUI:
         help_menu.add_command(label="Installer FFmpeg", command=self.offer_ffmpeg_install)
 
         self.update_memory_display() # Afficher les éléments de la mémoire au démarrage
+
+    def _on_canvas_resize(self, event):
+        """Redimensionne la fenêtre interne du canvas pour qu'elle corresponde à la largeur du canvas."""
+        self.downloads_canvas.itemconfig(self.downloads_container_frame_id, width=event.width)
+
 
     def log(self, message: str):
         """Affiche un message dans la zone de log de l'interface graphique."""
@@ -371,23 +440,7 @@ class MusicDLGUI:
     def _extract_video_info_from_url(self, url: str) -> dict:
         """Extrait les informations de base depuis une URL YouTube/YouTube Music."""
         import re
-        # Pour les playlists
-        playlist_patterns = [
-            r'[&?]list=([^&]+)',
-        ]
-        # Pour les vidéos individuelles
-        video_patterns = [
-            r'[?&]v=([^&]+)',
-            r'youtu\.be\/([a-zA-Z0-9_-]{11})', # Pour youtu.be/VIDEO_ID
-            r'youtube\.com\/embed\/([a-zA-Z0-9_-]{11})',
-            r'youtube\.com\/v\/([a-zA-Z0-9_-]{11})',
-            r'youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})',
-        ]
-
-        # Essayer d'extraire le titre et la durée en utilisant youtube-dlp (sans téléchargement)
         try:
-            # Utilisez stdout=subprocess.PIPE pour ne pas afficher la sortie de la console
-            # Utilisez CREATE_NO_WINDOW sur Windows pour éviter l'ouverture d'une fenêtre de console
             creationflags = 0
             if sys.platform == "win32":
                 creationflags = subprocess.CREATE_NO_WINDOW
@@ -404,8 +457,6 @@ class MusicDLGUI:
                 title = output_lines[0].strip()
                 duration_str = output_lines[1].strip()
 
-                # yt-dlp retourne la durée en secondes pour --get-duration
-                # Convertir les secondes en HH:MM:SS
                 try:
                     total_seconds = int(duration_str)
                     hours = total_seconds // 3600
@@ -413,7 +464,7 @@ class MusicDLGUI:
                     seconds = total_seconds % 60
                     duration = f"{hours:02}:{minutes:02}:{seconds:02}"
                 except ValueError:
-                    duration = "00:00:00" # Fallback si la conversion échoue
+                    duration = "00:00:00"
 
                 self.log(f"Informations extraites: Titre='{title}', Durée='{duration}'")
                 return {"title": title, "url": url, "duration": duration}
@@ -441,7 +492,6 @@ class MusicDLGUI:
             return
 
         self.log(f"Tentative d'extraction des informations pour: {url}")
-        # Exécuter l'extraction dans un thread pour ne pas bloquer l'UI
         threading.Thread(target=self._add_url_to_memory_task, args=(url,)).start()
 
     def _add_url_to_memory_task(self, url: str):
@@ -473,7 +523,6 @@ class MusicDLGUI:
             return
 
         self.log(f"Recherche de '{query}' sur YouTube...")
-        # Exécuter la recherche dans un thread pour ne pas bloquer l'UI
         threading.Thread(target=self._perform_Youtube_task, args=(query,)).start()
 
     def _perform_Youtube_task(self, query: str):
@@ -511,7 +560,6 @@ class MusicDLGUI:
     def on_results_double_click(self, event):
         item_id = self.results_tree.selection()[0]
         item_values = self.results_tree.item(item_id, 'values')
-        # L'ID affiché est item_values[0], mais l'index réel est item_values[0] - 1
         selected_result_index = int(item_values[0]) - 1
         
         if 0 <= selected_result_index < len(self.search_results):
@@ -525,7 +573,6 @@ class MusicDLGUI:
 
     def on_memory_double_click(self, event):
         item_id = self.memory_tree.selection()[0]
-        # L'item_id de la mémoire correspond directement à l'index si inséré avec iid=str(i)
         selected_memory_index = int(item_id)
         
         if 0 <= selected_memory_index < len(self.memory.get_memory()):
@@ -553,17 +600,31 @@ class MusicDLGUI:
             messagebox.showwarning("yt-dlp introuvable", "yt-dlp n'est pas configuré. Impossible de télécharger. Veuillez l'installer via le menu Aide.")
             return
         
-        if (selected_format == "mp3" or selected_format == "wav") and not self.downloader.ffmpeg_path:
-            messagebox.showwarning("FFmpeg introuvable", "FFmpeg n'est pas configuré. Impossible de convertir en MP3/WAV. Veuillez l'installer via le menu Aide.")
+        if (selected_format in ["mp3", "wav", "flac", "m4a", "opus"]) and not self.downloader.ffmpeg_path:
+            messagebox.showwarning("FFmpeg introuvable", "FFmpeg n'est pas configuré. Impossible de convertir en MP3/WAV/FLAC/M4A/OPUS. Veuillez l'installer via le menu Aide.")
             return
 
         self.log(f"Préparation du téléchargement de l'URL: {url} au format {selected_format}...")
-        # Lancer le téléchargement dans un thread séparé
-        threading.Thread(target=lambda: self._download_single_url_task(url, selected_format)).start()
+        
+        download_id = str(uuid.uuid4()) # Générer un ID unique pour ce téléchargement
+        initial_title = url
+        try:
+            info = self._extract_video_info_from_url(url)
+            if info and info["title"] != "Titre inconnu":
+                initial_title = info["title"]
+        except Exception:
+            pass # Ignorer l'erreur d'extraction ici, le téléchargement continuera
 
-    def _download_single_url_task(self, url: str, selected_format: str):
-        success = self.downloader._download_single_item(url, selected_format)
-        self.root.after(0, lambda: self.on_download_complete(success))
+        # Ajouter le téléchargement à la file d'attente
+        self.add_download_to_queue({
+            "id": download_id,
+            "title": initial_title,
+            "url": url,
+            "format": selected_format,
+            "status": "En attente",
+            "progress": 0
+        })
+        self.notebook.select(1) # Sélectionner l'onglet "Téléchargements"
 
 
     def add_selected_to_memory(self):
@@ -575,7 +636,7 @@ class MusicDLGUI:
         success_count = 0
         for item_id in selected_items:
             item_values = self.results_tree.item(item_id, 'values')
-            selected_result_index = int(item_values[0]) - 1 # Récupérer l'index original
+            selected_result_index = int(item_values[0]) - 1
             
             if 0 <= selected_result_index < len(self.search_results):
                 item_data = self.search_results[selected_result_index]
@@ -605,22 +666,26 @@ class MusicDLGUI:
             messagebox.showwarning("yt-dlp introuvable", "yt-dlp n'est pas configuré. Impossible de télécharger. Veuillez l'installer via le menu Aide.")
             return
         
-        if (selected_format == "mp3" or selected_format == "wav") and not self.downloader.ffmpeg_path:
-            messagebox.showwarning("FFmpeg introuvable", "FFmpeg n'est pas configuré. Impossible de convertir en MP3/WAV. Veuillez l'installer via le menu Aide.")
+        if (selected_format in ["mp3", "wav", "flac", "m4a", "opus"]) and not self.downloader.ffmpeg_path:
+            messagebox.showwarning("FFmpeg introuvable", "FFmpeg n'est pas configuré. Impossible de convertir en MP3/WAV/FLAC/M4A/OPUS. Veuillez l'installer via le menu Aide.")
             return
 
-        urls_to_download = []
+        self.log(f"Préparation du téléchargement de {len(selected_items)} éléments sélectionnés...")
         for item_id in selected_items:
             item_values = self.results_tree.item(item_id, 'values')
             selected_result_index = int(item_values[0]) - 1
             if 0 <= selected_result_index < len(self.search_results):
-                urls_to_download.append(self.search_results[selected_result_index]['url'])
-
-        if urls_to_download:
-            self.log(f"Préparation du téléchargement de {len(urls_to_download)} éléments sélectionnés...")
-            self.downloader.download_items_in_bulk(urls_to_download, selected_format, self.on_multiple_download_complete)
-        else:
-            messagebox.showwarning("Téléchargement", "Aucune URL valide sélectionnée pour le téléchargement.")
+                item_data = self.search_results[selected_result_index]
+                download_id = str(uuid.uuid4())
+                self.add_download_to_queue({
+                    "id": download_id,
+                    "title": item_data['title'],
+                    "url": item_data['url'],
+                    "format": selected_format,
+                    "status": "En attente",
+                    "progress": 0
+                })
+        self.notebook.select(1) # Sélectionner l'onglet "Téléchargements"
 
 
     def remove_selected_from_memory(self):
@@ -629,7 +694,6 @@ class MusicDLGUI:
             messagebox.showwarning("Supprimer de la Mémoire", "Veuillez sélectionner au moins un élément à supprimer.")
             return
 
-        # Supprimer en ordre décroissant pour éviter les problèmes d'index
         indices_to_remove = sorted([int(self.memory_tree.item(item_id)['iid']) for item_id in selected_items], reverse=True)
         
         success_count = 0
@@ -653,8 +717,8 @@ class MusicDLGUI:
             messagebox.showinfo("Vider la Mémoire", "La mémoire a été entièrement vidée.")
 
     def download_all_from_memory(self):
-        urls_to_download = self.memory.get_urls()
-        if not urls_to_download:
+        memory_items = self.memory.get_memory()
+        if not memory_items:
             messagebox.showwarning("Téléchargement", "La mémoire est vide. Aucun élément à télécharger.")
             return
 
@@ -664,12 +728,227 @@ class MusicDLGUI:
             messagebox.showwarning("yt-dlp introuvable", "yt-dlp n'est pas configuré. Impossible de télécharger. Veuillez l'installer via le menu Aide.")
             return
         
-        if (selected_format == "mp3" or selected_format == "wav") and not self.downloader.ffmpeg_path:
-            messagebox.showwarning("FFmpeg introuvable", "FFmpeg n'est pas configuré. Impossible de convertir en MP3/WAV. Veuillez l'installer via le menu Aide.")
+        if (selected_format in ["mp3", "wav", "flac", "m4a", "opus"]) and not self.downloader.ffmpeg_path:
+            messagebox.showwarning("FFmpeg introuvable", "FFmpeg n'est pas configuré. Impossible de convertir en MP3/WAV/FLAC/M4A/OPUS. Veuillez l'installer via le menu Aide.")
             return
 
-        self.log(f"Préparation du téléchargement de tous les {len(urls_to_download)} éléments de la mémoire...")
-        self.downloader.download_items_in_bulk(urls_to_download, selected_format, self.on_multiple_download_complete)
+        self.log(f"Préparation du téléchargement de tous les {len(memory_items)} éléments de la mémoire...")
+        for item in memory_items:
+            download_id = str(uuid.uuid4())
+            self.add_download_to_queue({
+                "id": download_id,
+                "title": item['title'],
+                "url": item['url'],
+                "format": selected_format,
+                "status": "En attente",
+                "progress": 0
+            })
+        self.notebook.select(1) # Sélectionner l'onglet "Téléchargements"
+
+    def add_download_to_queue(self, download_info: dict):
+        """Ajoute un téléchargement à la file d'attente et crée sa carte d'affichage."""
+        self.download_queue.put(download_info)
+        self.downloads_list.append(download_info) # Ajouter à la liste globale pour suivi
+        self.root.after(0, lambda: self._create_download_card(download_info))
+        self.log(f"Ajouté à la file d'attente: {download_info['title']} (ID: {download_info['id']})")
+        self.root.after(100, self._start_next_download_if_possible) # Tenter de démarrer immédiatement
+
+    def _create_download_card(self, download_info: dict):
+        """Crée les widgets Tkinter pour une nouvelle carte de téléchargement."""
+        download_id = download_info['id']
+        title = download_info['title']
+        status = download_info['status']
+        progress = download_info['progress']
+
+        card_frame = ttk.Frame(self.downloads_container_frame, style='DownloadCard.TFrame')
+        card_frame.pack(fill='x', padx=5, pady=5)
+
+        title_label = ttk.Label(card_frame, text=title, style='DownloadTitle.TLabel', wraplength=300)
+        title_label.pack(fill='x', anchor='w', pady=(0, 5))
+
+        status_label = ttk.Label(card_frame, text=f"Statut: {status}", style='DownloadStatus.TLabel')
+        status_label.pack(fill='x', anchor='w', pady=(0, 5))
+
+        progressbar = ttk.Progressbar(card_frame, orient="horizontal", length=200, mode="determinate", style="TProgressbar")
+        progressbar.pack(fill='x', pady=(0, 5))
+        progressbar.config(value=progress)
+
+        cancel_button = ttk.Button(card_frame, text="Annuler", style='Danger.TButton',
+                                   command=lambda: self.cancel_download(download_id))
+        cancel_button.pack(side='right', pady=(0, 0))
+
+        self.download_widgets[download_id] = {
+            'card_frame': card_frame,
+            'title_label': title_label,
+            'status_label': status_label,
+            'progressbar': progressbar,
+            'cancel_button': cancel_button
+        }
+        self.downloads_container_frame.update_idletasks()
+        self.downloads_canvas.config(scrollregion=self.downloads_canvas.bbox("all"))
+
+    def _start_next_download_if_possible(self):
+        """Démarre le prochain téléchargement de la file d'attente si la limite n'est pas atteinte."""
+        with self.download_lock:
+            if self.active_download_count < self.concurrent_limit and not self.download_queue.empty():
+                try:
+                    download_info = self.download_queue.get_nowait() # Récupère sans bloquer
+                    # Vérifier si le téléchargement n'a pas été annulé pendant qu'il était en attente
+                    if download_info['status'] == "cancelled":
+                        self.log(f"Téléchargement {download_info['title']} (ID: {download_info['id']}) a été annulé avant de commencer.")
+                        self._start_next_download_if_possible() # Tenter le suivant
+                        return
+
+                    self.active_download_count += 1
+                    self.log(f"Démarrage du téléchargement: {download_info['title']} (Actifs: {self.active_download_count}/{self.concurrent_limit})")
+                    # Mettre à jour le statut de la carte immédiatement
+                    self.root.after(0, lambda: self._update_download_card_widgets(
+                        self.download_widgets[download_info['id']], 
+                        {**download_info, 'status': 'active', 'message': 'Démarrage...'} # Utiliser 'active' pour correspondre au downloader
+                    ))
+                    # Lancer le téléchargement dans un thread séparé
+                    threading.Thread(target=lambda: self.downloader._download_single_item(
+                        download_info['url'], 
+                        download_info['format'], 
+                        download_info['id']
+                    )).start()
+                except queue.Empty:
+                    pass # La queue était vide, rien à faire
+            else:
+                self.log(f"File d'attente pleine ou limite atteinte. Actifs: {self.active_download_count}/{self.concurrent_limit}, En attente: {self.download_queue.qsize()}")
+
+
+    def update_download_progress(self, download_id: str, status: str, progress: float, message: str = ""):
+        """
+        Met à jour la progression d'un téléchargement dans la liste et son widget.
+        Appelé par le Downloader.
+        """
+        # Trouver l'info de téléchargement dans la liste
+        dl_info = next((dl for dl in self.downloads_list if dl['id'] == download_id), None)
+        if dl_info:
+            dl_info['status'] = status
+            dl_info['progress'] = progress
+            dl_info['message'] = message # Stocker le message de progression détaillé
+
+        # Mettre à jour les widgets correspondants
+        if download_id in self.download_widgets:
+            widgets = self.download_widgets[download_id]
+            self.root.after(0, lambda: self._update_download_card_widgets(widgets, dl_info))
+
+            # Si le téléchargement est terminé (succès, échec, annulation), libérer un "slot"
+            if status in ["completed", "failed", "cancelled"]:
+                with self.download_lock:
+                    self.active_download_count -= 1
+                    self.log(f"Téléchargement {download_id} terminé/annulé/échoué. Actifs restants: {self.active_download_count}")
+                self.root.after(100, self._start_next_download_if_possible) # Tenter de démarrer le suivant
+
+    def _update_download_card_widgets(self, widgets: dict, dl_info: dict):
+        """Met à jour les widgets d'une carte de téléchargement spécifique."""
+        status_text = f"Statut: {dl_info['status']}"
+        if dl_info['status'] == "active":
+            status_text = f"Statut: Actif ({dl_info['progress']:.1f}%)"
+            widgets['progressbar'].config(value=dl_info['progress'])
+            widgets['cancel_button'].config(state='normal') # Activer le bouton Annuler
+        elif dl_info['status'] == "En attente":
+            status_text = f"Statut: En attente"
+            widgets['progressbar'].config(value=0)
+            widgets['cancel_button'].config(state='normal')
+        elif dl_info['status'] == "completed":
+            status_text = f"Statut: Terminé ({dl_info['message']})"
+            widgets['progressbar'].config(value=100)
+            widgets['cancel_button'].config(state='disabled') # Désactiver le bouton Annuler après la fin
+            widgets['progressbar'].stop() # Arrêter l'animation si elle était en mode indéterminé
+        elif dl_info['status'] == "failed":
+            status_text = f"Statut: Échec ({dl_info['message']})"
+            widgets['progressbar'].config(value=0) # Réinitialiser la barre ou la vider
+            widgets['cancel_button'].config(state='disabled')
+            widgets['progressbar'].stop()
+        elif dl_info['status'] == "cancelled":
+            status_text = f"Statut: Annulé ({dl_info['message']})"
+            widgets['progressbar'].config(value=0)
+            widgets['cancel_button'].config(state='disabled')
+            widgets['progressbar'].stop()
+
+        widgets['status_label'].config(text=status_text)
+        
+        # Mettre à jour la couleur du statut
+        if dl_info['status'] == "active":
+            widgets['status_label'].config(foreground="blue")
+        elif dl_info['status'] == "completed":
+            widgets['status_label'].config(foreground="green")
+        elif dl_info['status'] == "failed":
+            widgets['status_label'].config(foreground="red")
+        elif dl_info['status'] == "cancelled":
+            widgets['status_label'].config(foreground="orange")
+        elif dl_info['status'] == "En attente":
+            widgets['status_label'].config(foreground='#cccccc') # Couleur par défaut ou gris
+        else:
+            widgets['status_label'].config(foreground=self.root.tk.eval('ttk::style lookup DownloadStatus.TLabel -foreground')) # Couleur par défaut
+
+        # Mettre à jour la région de défilement du canvas après la mise à jour des widgets
+        self.downloads_container_frame.update_idletasks()
+        self.downloads_canvas.config(scrollregion=self.downloads_canvas.bbox("all"))
+
+
+    def cancel_download(self, download_id: str):
+        """Annule un téléchargement spécifique."""
+        dl_to_cancel = next((dl for dl in self.downloads_list if dl['id'] == download_id), None)
+        if dl_to_cancel:
+            if dl_to_cancel['status'] == "active":
+                if messagebox.askyesno("Confirmer Annulation", f"Êtes-vous sûr de vouloir annuler le téléchargement de '{dl_to_cancel['title']}' ?"):
+                    self.downloader.cancel_download(download_id)
+                    # Le progress_callback mettra à jour le statut à "cancelled"
+            elif dl_to_cancel['status'] == "En attente":
+                # Si en attente, on le marque comme annulé et on met à jour son statut
+                if messagebox.askyesno("Confirmer Annulation", f"Êtes-vous sûr de vouloir annuler le téléchargement en attente de '{dl_to_cancel['title']}' ?"):
+                    dl_to_cancel['status'] = "cancelled"
+                    dl_to_cancel['message'] = "Annulé (en attente)"
+                    self.root.after(0, lambda: self._update_download_card_widgets(self.download_widgets[download_id], dl_to_cancel))
+                    self.log(f"Téléchargement en attente {dl_to_cancel['title']} annulé.")
+                    # Tenter de démarrer le prochain téléchargement si un slot se libère (bien que ce ne soit pas un slot "actif")
+                    self.root.after(100, self._start_next_download_if_possible)
+            else:
+                messagebox.showinfo("Annuler Téléchargement", f"Le téléchargement de '{dl_to_cancel['title']}' n'est pas actif ou en attente et ne peut pas être annulé.")
+        else:
+            self.log(f"Erreur: Téléchargement non trouvé pour l'ID {download_id}.")
+
+
+    def set_concurrent_downloads_limit_dialog(self):
+        """Ouvre une boîte de dialogue pour définir la limite de téléchargements simultanés."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Limite de Téléchargements")
+        dialog.geometry("300x150")
+        dialog.configure(bg='#2b2b2b')
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        current_limit = self.config.get_concurrent_downloads_limit()
+        limit_var = tk.IntVar(value=current_limit)
+
+        ttk.Label(dialog, text="Nombre de téléchargements simultanés (1-15):",
+                  style='Custom.TLabel', background='#2b2b2b').pack(pady=10)
+
+        limit_spinbox = ttk.Spinbox(dialog, from_=1, to=15, textvariable=limit_var,
+                                    width=5, font=('Arial', 10), style='TEntry')
+        limit_spinbox.pack(pady=5)
+
+        def save_limit():
+            try:
+                new_limit = limit_var.get()
+                self.config.set_concurrent_downloads_limit(new_limit)
+                self.concurrent_limit = new_limit # Mettre à jour la limite interne
+                self.log(f"Limite de téléchargements simultanés définie sur: {new_limit}")
+                messagebox.showinfo("Configuration", f"Limite définie sur {new_limit}.")
+                dialog.destroy()
+                self.root.after(100, self._start_next_download_if_possible) # Tenter de démarrer de nouveaux téléchargements avec la nouvelle limite
+            except tk.TclError:
+                messagebox.showerror("Erreur", "Veuillez entrer un nombre valide.")
+
+        save_btn = ttk.Button(dialog, text="Sauvegarder", command=save_limit, style='Accent.TButton')
+        save_btn.pack(pady=10)
+
+        dialog.wait_window(dialog)
 
 
     def configure_api_key(self):
@@ -717,17 +996,15 @@ class MusicDLGUI:
         if response:
             if sys.platform == "win32":
                 try:
-                    # Téléchargement via le navigateur
                     webbrowser.open("https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe")
                     messagebox.showinfo("Téléchargement yt-dlp", "Le téléchargement de yt-dlp.exe devrait commencer dans votre navigateur. Placez le fichier téléchargé dans le même dossier que l'exécutable de cette application.")
                     self.log("Ouverture du lien de téléchargement de yt-dlp.exe.")
                 except Exception as e:
                     messagebox.showerror("Erreur", f"Impossible d'ouvrir le navigateur : {e}")
-            else: # Pour Linux/macOS, ouvrir la page GitHub
+            else:
                 webbrowser.open("https://github.com/yt-dlp/yt-dlp#installation")
                 messagebox.showinfo("Installation yt-dlp", "La page d'installation de yt-dlp s'est ouverte dans votre navigateur. Suivez les instructions pour votre système.")
                 self.log("Ouverture de la page d'installation de yt-dlp.")
-        # Après l'installation supposée, vérifier à nouveau la localisation
         self.root.after(1000, self.check_yt_dlp)
 
 
@@ -749,14 +1026,12 @@ class MusicDLGUI:
             webbrowser.open("https://ffmpeg.org/download.html")
             messagebox.showinfo("Téléchargement FFmpeg", "La page de téléchargement de FFmpeg s'est ouverte dans votre navigateur. Téléchargez la version adaptée à votre système et placez les exécutables (ffmpeg, ffprobe, ffplay) dans le même dossier que cette application, ou ajoutez-les à votre PATH système.")
             self.log("Ouverture du lien de téléchargement de FFmpeg.")
-        # Après l'installation supposée, vérifier à nouveau la localisation
         self.root.after(1000, self.check_ffmpeg_status)
 
 
     def check_and_offer_yt_dlp_install(self):
         """Vérifie yt-dlp au démarrage et propose l'installation si non trouvé."""
         if not self.downloader.find_yt_dlp_location():
-            # Donner un court délai pour que l'interface soit visible avant le popup
             self.root.after(500, lambda: messagebox.showwarning(
                 "yt-dlp Manquant",
                 "yt-dlp (le téléchargeur) n'a pas été trouvé sur votre système. "
@@ -768,7 +1043,6 @@ class MusicDLGUI:
     def check_and_offer_ffmpeg_install(self):
         """Vérifie FFmpeg au démarrage et propose l'installation si non trouvé."""
         if not self.downloader.find_ffmpeg_location():
-            # Donner un court délai pour que l'interface soit visible avant le popup
             self.root.after(600, lambda: messagebox.showwarning(
                 "FFmpeg Manquant",
                 "FFmpeg (le convertisseur audio/vidéo) n'a pas été trouvé sur votre système. "
@@ -784,23 +1058,17 @@ class MusicDLGUI:
             self.downloader.set_download_path(folder_selected)
             self.log(f"Dossier de téléchargement défini sur: {self.config.download_path}")
 
-    def on_download_complete(self, success: bool):
-        """Callback après un téléchargement unique. (Peut être supprimé si tout passe par download_items_in_bulk)"""
-        if success:
-            self.log("Téléchargement de vidéo terminé avec succès.")
-        else:
-            self.log("Échec du téléchargement de la vidéo.")
-
     def on_multiple_download_complete(self, success_count: int, total_count: int):
         """Callback après un téléchargement multiple."""
         self.log(f"Téléchargement multiple terminé: {success_count} sur {total_count} réussis.")
         if success_count == total_count:
-            messagebox.showinfo("Téléchargement Terminé", f"Tous les {total_count} éléments ont été téléchargés avec succès!")
+            self.root.after(0, lambda: messagebox.showinfo("Téléchargement Terminé", f"Tous les {total_count} éléments ont été téléchargés avec succès!"))
         elif success_count > 0:
-            messagebox.showwarning("Téléchargement Partiel", f"{success_count} sur {total_count} éléments ont été téléchargés. Voir les logs pour les détails.")
+            self.root.after(0, lambda: messagebox.showwarning("Téléchargement Partiel", f"{success_count} sur {total_count} éléments ont été téléchargés. Voir les logs pour les détails."))
         else:
-            messagebox.showerror("Échec du Téléchargement", "Aucun élément n'a pu être téléchargé. Voir les logs pour les détails.")
+            self.root.after(0, lambda: messagebox.showerror("Échec du Téléchargement", "Aucun élément n'a pu être téléchargé. Voir les logs pour les détails."))
 
     def run(self):
         """Lancer l'application."""
         self.root.mainloop()
+

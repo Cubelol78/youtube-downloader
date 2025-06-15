@@ -72,9 +72,12 @@ class YouTubeAPI:
             # Créer un dictionnaire des durées
             durations = {}
             for item in details_response.get('items', []):
-                video_id = item['id']
-                duration = item['contentDetails']['duration']
-                durations[video_id] = duration
+                video_id = item.get('id')
+                # CORRECTION: Utiliser .get() pour accéder en toute sécurité à la durée.
+                # Certaines vidéos (ex: diffusions en direct à venir) peuvent ne pas avoir de durée.
+                duration = item.get('contentDetails', {}).get('duration')
+                if video_id and duration:
+                    durations[video_id] = duration
 
             # Construire les résultats finaux
             for i, item in enumerate(search_response.get('items', [])):
@@ -84,13 +87,14 @@ class YouTubeAPI:
                     
                 title = item['snippet']['title']
                 url = f"https://www.youtube.com/watch?v={video_id}"
-                duration = durations.get(video_id, "PT0S")
+                # Si une vidéo n'avait pas de durée, une valeur par défaut sera utilisée
+                duration_str = durations.get(video_id, "PT0S")
 
                 result = {
                     "id": i + 1,
                     "title": title,
                     "url": url,
-                    "duration": self.parse_duration(duration)
+                    "duration": self.parse_duration(duration_str)
                 }
                 results.append(result)
                 

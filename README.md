@@ -5,8 +5,11 @@ MusicDL est une application de bureau conçue pour faciliter la recherche et le 
 ## Table des matières
 
 - [Fonctionnalités](#fonctionnalités)
+  - [Formats Supportés](#formats-supportés)
 - [Prérequis](#prérequis)
+- [Installation](#installation)
 - [Lancement de l'application](#lancement-de-lapplication)
+  - [Clé API YouTube](#clé-api-youtube-recommandé)
 - [Utilisation](#utilisation)
   - [Interface principale](#interface-principale)
   - [Recherche et Téléchargement](#recherche-et-téléchargement)
@@ -14,22 +17,72 @@ MusicDL est une application de bureau conçue pour faciliter la recherche et le 
   - [File d'attente des téléchargements](#file-dattente-des-téléchargements)
 - [Configuration](#configuration)
 - [Structure du projet](#structure-du-projet)
+- [Dépannage](#dépannage)
 - [Contribuer](#contribuer)
 - [Licence](#licence)
 
 ## Fonctionnalités
 
-- **Installation Automatique des Dépendances** : L'application vérifie et installe automatiquement les paquets nécessaires au démarrage.
-- **Recherche YouTube Intégrée** : Trouvez des vidéos directement depuis l'application avec l'API YouTube Data v3.
-- **Téléchargement Polyvalent** : Téléchargez des vidéos complètes ou extrayez l'audio dans une multitude de formats (MP3, MP4, WAV, FLAC, etc.).
-- **Gestionnaire de File d'Attente** : Ajoutez plusieurs téléchargements qui seront traités séquentiellement avec une limite de téléchargements simultanés configurable.
-- **Gestion de la Mémoire** : Sauvegardez une liste de liens pour les télécharger plus tard.
-- **Interface Graphique (GUI)** : Basée sur tkinter pour une expérience utilisateur simple et interactive.
-- **Configuration Persistante** : Sauvegarde votre chemin de téléchargement, clé API et limite de téléchargements.
+| Fonctionnalité | Description | Statut |
+|----------------|-------------|--------|
+| 🔧 **Installation Automatique** | Vérification et installation automatique des dépendances au démarrage | ✅ Disponible |
+| 🔍 **Recherche YouTube** | Recherche intégrée via l'API YouTube Data v3 | ✅ Disponible |
+| 📥 **Téléchargement Multi-format** | Support des formats MP3, MP4, WAV, FLAC, etc. | ✅ Disponible |
+| 📋 **Gestionnaire de File d'Attente** | Téléchargements séquentiels avec limite configurable | ✅ Disponible |
+| 💾 **Gestion de la Mémoire** | Sauvegarde de listes de liens pour téléchargement ultérieur | ✅ Disponible |
+| 🖥️ **Interface Graphique** | Interface utilisateur basée sur tkinter | ✅ Disponible |
+| ⚙️ **Configuration Persistante** | Sauvegarde des paramètres utilisateur | ✅ Disponible |
+| 📊 **Suivi des Téléchargements** | Monitoring en temps réel des téléchargements | ✅ Disponible |
+| 🎵 **Support Playlist** | Téléchargement de playlists YouTube complètes | ✅ Disponible |
+
+### Formats Supportés
+
+| Type | Formats Disponibles |
+|------|-------------------|
+| **Audio** | MP3, WAV, FLAC, M4A, OPUS |
+| **Vidéo** | MP4, AVI, MKV, WEBM, MOV |
+
+> 📝 **Note** : La sélection de qualité spécifique (résolution/bitrate) n'est pas encore disponible. Seuls les formats de fichiers peuvent être choisis.
 
 ## Prérequis
 
-Assurez-vous d'avoir Python 3 installé sur votre système. Vous pouvez le télécharger depuis [python.org](https://python.org).
+| Composant | Version Minimale | Recommandé | Notes |
+|-----------|------------------|------------|-------|
+| **Python** | 3.7+ | 3.10+ | Téléchargeable depuis [python.org](https://python.org) |
+| **Système d'exploitation** | Windows 10+ | Windows 10+ | Conçu pour Windows, non testé sur autres OS |
+| **Espace disque** | 100 MB | 1 GB+ | Pour l'application + téléchargements |
+| **Connexion Internet** | Requise | Haut débit | Pour l'API YouTube et téléchargements |
+
+## Installation
+
+### Installation Automatique (Recommandée)
+
+1. Téléchargez le projet
+2. Exécutez `Youtube Downloader.bat`
+3. L'application installera automatiquement toutes les dépendances nécessaires
+
+> ⚡ **Installation Intelligente** : Toutes les dépendances sont installées automatiquement au premier lancement. Aucun fichier `requirements.txt` n'est nécessaire.
+
+### Installation Manuelle
+
+```bash
+# Cloner le dépôt
+git clone [URL_DU_DEPOT]
+cd MusicDL
+
+# Lancer l'application (les dépendances s'installent automatiquement)
+python main.py
+```
+
+### Dépendances Principales
+
+Les packages suivants sont installés automatiquement :
+
+| Package | Utilisation |
+|---------|-------------|
+| `yt-dlp` | Téléchargement YouTube |
+| `requests` | API YouTube |
+| `tkinter` | Interface graphique (inclus avec Python) |
 
 ## Lancement de l'application
 
@@ -41,12 +94,15 @@ Au premier lancement, le script installera automatiquement les bibliothèques n�
 
 Pour utiliser la fonctionnalité de recherche, une clé API YouTube Data v3 est nécessaire.
 
-1. Rendez-vous sur la [console Google Cloud](https://console.cloud.google.com/).
-2. Créez un projet et activez l'API YouTube Data API v3.
-3. Créez une "Clé API" (API Key).
-4. Copiez votre clé et collez-la dans l'application via le menu **Configuration > Configurer la clé API YouTube**.
+| Étape | Action | Description |
+|-------|--------|-------------|
+| 1️⃣ | **Accès Console** | Rendez-vous sur la [console Google Cloud](https://console.cloud.google.com/) |
+| 2️⃣ | **Création Projet** | Créez un nouveau projet ou sélectionnez un existant |
+| 3️⃣ | **Activation API** | Activez l'API YouTube Data API v3 |
+| 4️⃣ | **Génération Clé** | Créez une "Clé API" (API Key) |
+| 5️⃣ | **Configuration** | Dans MusicDL : **Configuration > Configurer la clé API YouTube** |
 
-**Sans clé API, seule la fonctionnalité de téléchargement par URL directe sera disponible.**
+> ⚠️ **Important** : Sans clé API, seule la fonctionnalité de téléchargement par URL directe sera disponible.
 
 ## Utilisation
 
@@ -85,14 +141,37 @@ Le menu "Configuration" permet de :
 
 ## Structure du projet
 
-- `main.py` : Point d'entrée, gère l'installation des dépendances.
-- `main_gui.py` : Cœur de l'application, gère l'interface et la logique principale.
-- `config_manager.py` : Gère la configuration (clé API, chemins).
-- `youtube_api.py` : Gère les interactions avec l'API YouTube.
-- `downloader.py` : Encapsule la logique de téléchargement avec yt-dlp.
-- `memory_manager.py` : Gère la sauvegarde et le chargement de la mémoire.
-- `dialogs.py` : Contient les boîtes de dialogue personnalisées.
-- `README.md` : Ce fichier de documentation.
+| Fichier | Rôle | Description |
+|---------|------|-------------|
+| `main.py` | 🚀 **Point d'entrée** | Gère l'installation des dépendances et lance l'application |
+| `main_gui.py` | 🖥️ **Interface principale** | Cœur de l'application, gère l'interface et la logique |
+| `config_manager.py` | ⚙️ **Configuration** | Gestion des paramètres (clé API, chemins, préférences) |
+| `youtube_api.py` | 🔍 **API YouTube** | Interface avec l'API YouTube Data v3 |
+| `downloader.py` | 📥 **Téléchargement** | Logique de téléchargement avec yt-dlp |
+| `memory_manager.py` | 💾 **Mémoire** | Sauvegarde et chargement des listes de liens |
+| `dialogs.py` | 💬 **Dialogues** | Boîtes de dialogue personnalisées |
+| `Youtube Downloader.bat` | 🏃 **Lanceur Windows** | Script de lancement pour Windows |
+
+## Dépannage
+
+### Problèmes Courants
+
+| Problème | Cause Probable | Solution |
+|----------|----------------|----------|
+| ❌ **Erreur de téléchargement** | URL invalide ou vidéo privée | Vérifiez l'URL et les permissions |
+| 🔑 **Recherche non disponible** | Clé API manquante/invalide | Configurez une clé API valide |
+| 🐌 **Téléchargement lent** | Connexion Internet | Réduisez la limite de téléchargements simultanés |
+| 💾 **Erreur de sauvegarde** | Permissions insuffisantes | Vérifiez les droits d'écriture du dossier |
+| 🔄 **Interface figée** | Traitement en cours | Attendez la fin du traitement |
+
+### Codes d'Erreur
+
+| Code | Signification | Action |
+|------|---------------|--------|
+| `ERROR_001` | Clé API invalide | Vérifiez votre clé dans Configuration |
+| `ERROR_002` | Quota API dépassé | Attendez le renouvellement (24h) |
+| `ERROR_003` | Fichier inaccessible | Vérifiez les permissions |
+| `ERROR_004` | Format non supporté | Choisissez un format compatible |
 
 ## Contribuer
 

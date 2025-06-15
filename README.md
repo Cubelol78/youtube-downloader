@@ -1,190 +1,103 @@
-# MusicDL - Téléchargeur de Musique YouTube
+# MusicDL - Téléchargeur de Musique et Vidéos YouTube
 
-MusicDL est une application de bureau conçue pour faciliter le téléchargement de musique et de vidéos depuis YouTube. Elle offre une interface graphique intuitive, des fonctionnalités de recherche via l'API YouTube, et la possibilité de gérer une "mémoire" de liens pour des téléchargements en masse.
+MusicDL est une application de bureau conçue pour faciliter la recherche et le téléchargement de musique et de vidéos depuis YouTube. Elle offre une interface graphique intuitive, des fonctionnalités de recherche via l'API YouTube, un gestionnaire de file d'attente, et la possibilité de gérer une "mémoire" de liens pour des téléchargements en masse.
 
 ## Table des matières
 
-* [MusicDL - Téléchargeur de Musique YouTube](#musicdl---téléchargeur-de-musique-youtube)
-
-  * [Table des matières](#table-des-matières)
-
-  * [Fonctionnalités](#fonctionnalités)
-
-  * [Lancement de l'application](#lancement-de-lapplication)
-
-    * [Clé API YouTube (Optionnel)](#clé-api-youtube-optionnel)
-
-  * [Utilisation](#utilisation)
-
-    * [Interface principale](#interface-principale)
-
-    * [Recherche de vidéos](#recherche-de-vidéos)
-
-    * [Téléchargement](#téléchargement)
-
-    * [Gestion de la mémoire](#gestion-de-la-mémoire)
-
-    * [Configuration](#configuration)
-
-  * [Structure du projet](#structure-du-projet)
-
-  * [Contribuer](#contribuer)
-
-  * [Licence](#licence)
+- [Fonctionnalités](#fonctionnalités)
+- [Prérequis](#prérequis)
+- [Lancement de l'application](#lancement-de-lapplication)
+- [Utilisation](#utilisation)
+  - [Interface principale](#interface-principale)
+  - [Recherche et Téléchargement](#recherche-et-téléchargement)
+  - [Gestion de la mémoire](#gestion-de-la-mémoire)
+  - [File d'attente des téléchargements](#file-dattente-des-téléchargements)
+- [Configuration](#configuration)
+- [Structure du projet](#structure-du-projet)
+- [Contribuer](#contribuer)
+- [Licence](#licence)
 
 ## Fonctionnalités
 
-* **Recherche YouTube Intégrée :** Trouvez des vidéos et de la musique directement depuis l'application en utilisant l'API YouTube Data API v3.
+- **Installation Automatique des Dépendances** : L'application vérifie et installe automatiquement les paquets nécessaires au démarrage.
+- **Recherche YouTube Intégrée** : Trouvez des vidéos directement depuis l'application avec l'API YouTube Data v3.
+- **Téléchargement Polyvalent** : Téléchargez des vidéos complètes ou extrayez l'audio dans une multitude de formats (MP3, MP4, WAV, FLAC, etc.).
+- **Gestionnaire de File d'Attente** : Ajoutez plusieurs téléchargements qui seront traités séquentiellement avec une limite de téléchargements simultanés configurable.
+- **Gestion de la Mémoire** : Sauvegardez une liste de liens pour les télécharger plus tard.
+- **Interface Graphique (GUI)** : Basée sur tkinter pour une expérience utilisateur simple et interactive.
+- **Configuration Persistante** : Sauvegarde votre chemin de téléchargement, clé API et limite de téléchargements.
 
-* **Téléchargement de Vidéos/Audio :** Téléchargez des vidéos complètes ou extrayez uniquement l'audio dans le format de votre choix.
+## Prérequis
 
-* **Gestion de la Mémoire :** Sauvegardez des liens YouTube pour des téléchargements ultérieurs ou en masse.
-
-* **Téléchargement en Masse :** Téléchargez simultanément plusieurs éléments depuis votre "mémoire".
-
-* **Interface Graphique (GUI) :** Basé sur `tkinter` pour une expérience utilisateur simple et interactive.
-
-* **Configuration Persistante :** Sauvegarde le chemin de téléchargement et la clé API YouTube.
+Assurez-vous d'avoir Python 3 installé sur votre système. Vous pouvez le télécharger depuis [python.org](https://python.org).
 
 ## Lancement de l'application
 
-Pour lancer MusicDL, exécutez le script `Youtube Downloader.bat` :
+Pour lancer MusicDL, exécutez simplement le fichier `Youtube Downloader.bat`.
 
-```
-python main.pyw
+Au premier lancement, le script installera automatiquement les bibliothèques nécessaires si elles ne sont pas déjà présentes.
 
-```
+### Clé API YouTube (Recommandé)
 
-### Clé API YouTube (Optionnel)
+Pour utiliser la fonctionnalité de recherche, une clé API YouTube Data v3 est nécessaire.
 
-Pour utiliser la fonctionnalité de recherche YouTube, vous aurez besoin d'une clé API YouTube Data API v3. Si vous ne la fournissez pas, l'application fonctionnera pour les téléchargements directs via URL, mais la fonction de recherche de vidéos via mots-clés sera désactivée.
+1. Rendez-vous sur la [console Google Cloud](https://console.cloud.google.com/).
+2. Créez un projet et activez l'API YouTube Data API v3.
+3. Créez une "Clé API" (API Key).
+4. Copiez votre clé et collez-la dans l'application via le menu **Configuration > Configurer la clé API YouTube**.
 
-1. Rendez-vous sur la [console Google Cloud](https://console.developers.google.com/).
-
-2. Créez un nouveau projet ou sélectionnez un projet existant.
-
-3. Activez l'**API YouTube Data API v3** pour votre projet.
-
-4. Créez des identifiants (Credentials) de type "Clé API" (API Key).
-
-5. Copiez votre clé API.
-
-Vous pourrez saisir cette clé API dans l'application via le menu "Configuration" > "Clé API YouTube".
+**Sans clé API, seule la fonctionnalité de téléchargement par URL directe sera disponible.**
 
 ## Utilisation
 
 ### Interface principale
 
-L'interface principale est divisée en plusieurs sections :
+L'interface est divisée en deux panneaux principaux :
 
-* **Champ de recherche :** Pour saisir des requêtes YouTube ou des URLs directes.
+- **Panneau de Gauche** : Recherche, téléchargement par URL et résultats de recherche.
+- **Panneau de Droite** : Mémoire (playlist), file d'attente des téléchargements et logs.
 
-* **Boutons de recherche :** Pour lancer la recherche ou effacer les résultats.
+### Recherche et Téléchargement
 
-* **Liste des résultats de recherche :** Affiche les vidéos trouvées avec leur titre, URL et durée.
+- **Rechercher** : Entrez un nom d'artiste ou de chanson dans la barre de recherche et cliquez sur "Rechercher". Les résultats s'afficheront en dessous.
+- **Télécharger par URL** : Collez une URL de vidéo ou de playlist YouTube dans le champ "URL YouTube" et cliquez sur "Télécharger".
+- **Télécharger depuis les résultats** : Sélectionnez un ou plusieurs éléments dans la liste des résultats, choisissez un format, puis cliquez sur "Télécharger Sélection".
 
-* **Boutons d'action pour les résultats :** Pour ajouter à la mémoire, copier l'URL, ou télécharger directement.
-
-* **Chemin de téléchargement :** Affiche et permet de modifier le dossier où les fichiers seront sauvegardés.
-
-* **Sélection du format :** Permet de choisir entre le téléchargement audio seul ou vidéo complète.
-
-* **Onglet "Mémoire" :** Affiche les éléments que vous avez sauvegardés pour des téléchargements en masse.
-
-* **Zone de log :** Affiche les messages de l'application, les progrès de téléchargement et les erreurs.
-
-### Recherche de vidéos
-
-1. Saisissez votre requête (titre de la chanson, artiste, etc.) dans le champ de texte en haut.
-
-2. Cliquez sur le bouton "Rechercher".
-
-3. Les résultats s'afficheront dans la liste.
-
-### Téléchargement
-
-* **Téléchargement depuis les résultats de recherche :**
-
-  1. Sélectionnez un ou plusieurs éléments dans la liste des résultats de recherche.
-
-  2. Choisissez le format de téléchargement (`Audio` ou `Vidéo`) via le menu déroulant.
-
-  3. Cliquez sur "Télécharger les sélectionnés".
-
-* **Téléchargement depuis la mémoire :**
-
-  1. Allez dans l'onglet "Mémoire".
-
-  2. Sélectionnez un ou plusieurs éléments que vous avez précédemment ajoutés.
-
-  3. Choisissez le format de téléchargement.
-
-  4. Cliquez sur "Télécharger les sélectionnés".
-
-* **Téléchargement direct par URL :**
-
-  1. Dans la section de recherche, collez directement une URL YouTube valide dans le champ de recherche.
-
-  2. Cliquez sur le bouton "Télécharger (URL directe)".
-
-  3. Choisissez le format de téléchargement.
+Tous les téléchargements sont ajoutés à la file d'attente dans l'onglet "Téléchargements".
 
 ### Gestion de la mémoire
 
-* **Ajouter à la mémoire :**
+- **Ajouter** : Sélectionnez des éléments dans les résultats de recherche et cliquez sur "Ajouter à la Mémoire".
+- **Télécharger** : Allez dans la section "Mémoire", choisissez un format, et cliquez sur "Télécharger Tout".
+- **Supprimer** : Sélectionnez des éléments dans la mémoire et utilisez les boutons "Supprimer Sélection" ou "Vider la Mémoire".
 
-  * Depuis les résultats de recherche : Sélectionnez un ou plusieurs éléments et cliquez sur "Ajouter à la Mémoire".
+### File d'attente des téléchargements
 
-  * Depuis une URL directe : Saisissez l'URL et cliquez sur "Ajouter à la Mémoire (URL directe)".
+L'onglet "Téléchargements" dans le panneau de droite affiche tous les téléchargements en attente, en cours, terminés ou échoués. Vous pouvez y suivre la progression et annuler des téléchargements.
 
-* **Voir la mémoire :** Cliquez sur l'onglet "Mémoire" pour voir tous les éléments sauvegardés.
-
-* **Supprimer de la mémoire :** Dans l'onglet "Mémoire", sélectionnez un ou plusieurs éléments et cliquez sur "Supprimer les sélectionnés".
-
-* **Vider la mémoire :** Dans l'onglet "Mémoire", cliquez sur "Vider la Mémoire" pour supprimer tous les éléments.
-
-### Configuration
+## Configuration
 
 Le menu "Configuration" permet de :
 
-* **Changer le dossier de téléchargement :** "Définir le dossier de téléchargement".
-
-* **Configurer la clé API YouTube :** "Clé API YouTube". Une fenêtre de dialogue s'ouvrira pour saisir votre clé.
+- Définir le dossier de téléchargement.
+- Configurer la clé API YouTube.
+- Définir la limite de téléchargements simultanés.
 
 ## Structure du projet
 
-* `main.py` : Point d'entrée principal de l'application.
-
-* `main_gui.py` : Contient la classe `MusicDLGUI` qui gère l'interface utilisateur et la logique principale de l'application.
-
-* `config_manager.py` : Gère le chargement et la sauvegarde de la configuration de l'application (clé API, chemin de téléchargement).
-
-* `youtube_api.py` : Interagit avec l'API YouTube Data API v3 pour la recherche de vidéos.
-
-* `downloader.py` : Encapsule la logique de téléchargement en utilisant `yt-dlp`. Gère les téléchargements individuels et en masse.
-
-* `memory_manager.py` : Gère le chargement, la sauvegarde, l'ajout et la suppression des liens dans la "mémoire" de l'application.
-
-* `dialogs.py` : Contient les classes pour les boîtes de dialogue personnalisées, comme celle pour la saisie de la clé API.
-
-* `README.md` : Ce fichier de documentation.
+- `main.py` : Point d'entrée, gère l'installation des dépendances.
+- `main_gui.py` : Cœur de l'application, gère l'interface et la logique principale.
+- `config_manager.py` : Gère la configuration (clé API, chemins).
+- `youtube_api.py` : Gère les interactions avec l'API YouTube.
+- `downloader.py` : Encapsule la logique de téléchargement avec yt-dlp.
+- `memory_manager.py` : Gère la sauvegarde et le chargement de la mémoire.
+- `dialogs.py` : Contient les boîtes de dialogue personnalisées.
+- `README.md` : Ce fichier de documentation.
 
 ## Contribuer
 
-Les contributions sont les bienvenues ! Si vous souhaitez améliorer MusicDL, n'hésitez pas à :
-
-1. Forker le dépôt.
-
-2. Créer une nouvelle branche (`git checkout -b feature/nouvelle-fonctionnalite`).
-
-3. Effectuer vos modifications.
-
-4. Commiter vos changements (`git commit -m 'Ajout d'une nouvelle fonctionnalité'`).
-
-5. Pousser vers la branche (`git push origin feature/nouvelle-fonctionnalite`).
-
-6. Ouvrir une Pull Request.
+Les contributions sont les bienvenues ! N'hésitez pas à forker le dépôt et à proposer des pull requests pour de nouvelles fonctionnalités ou des corrections de bugs.
 
 ## Licence
 
-Ce projet est sous licence [MIT](LICENSE).
+Ce projet est sous licence MIT.
